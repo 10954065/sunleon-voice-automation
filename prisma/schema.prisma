@@ -36,8 +36,104 @@ model Organization {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  memberships Membership[]
-  auditLogs   AuditLog[]
+  memberships      Membership[]
+  auditLogs        AuditLog[]
+  agents           Agent[]
+  knowledgeSources KnowledgeSource[]
+}
+
+model Agent {
+  id                 String         @id @default(cuid())
+  organizationId     String
+  name               String
+  archivedAt         DateTime?
+  publishedVersionId String?        @unique
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  organization       Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  versions           AgentVersion[] @relation("AgentVersions")
+  publishedVersion   AgentVersion?  @relation("PublishedVersion", fields: [publishedVersionId], references: [id])
+  knowledgeSources    KnowledgeSource[]
+
+  @@index([organizationId])
+}
+
+model AgentVersion {
+  id                  String    @id @default(cuid())
+  agentId              String
+  versionNumber        Int
+  instructions         String
+  persona              String?
+  tone                 String?
+  greeting             String?
+  languages            String[] @default(["en"])
+  leadCaptureEnabled   Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  publishedAt          DateTime?
+
+  agent                Agent    @relation("AgentVersions", fields: [agentId], references: [id], onDelete: Cascade)
+  publishedByAgent      Agent?   @relation("PublishedVersion")
+
+  @@unique([agentId, versionNumber])
+  @@index([agentId])
+}
+
+enum KnowledgeSourceType {
+  FILE
+  URL
+  FAQ
+  MANUAL
+}
+
+enum KnowledgeSourceStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+model KnowledgeSource {
+  id             String                @id @default(cuid())
+  organizationId String
+  agentId        String
+  type           KnowledgeSourceType
+  status         KnowledgeSourceStatus @default(PENDING)
+  title          String
+  sourceUrl      String?
+  storageKey     String?
+  rawContent     String?
+  errorMessage   String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  organization   Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent          Agent                 @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  chunks         KnowledgeChunk[]
+
+  @@index([organizationId])
+  @@index([agentId])
+}
+
+model KnowledgeChunk {
+  id             String          @id @default(cuid())
+  sourceId       String
+  organizationId String
+  agentId        String
+  chunkIndex     Int
+  content        String
+  createdAt      DateTime        @default(now())
+
+  source         KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  // Declared `Unsupported` (not a real Prisma-managed field) so `prisma migrate dev`'s
+  // drift detection knows this column exists and never proposes dropping it. The column
+  // itself was added by a raw-SQL migration (classic generator has no native vector type)
+  // and is read/written only via $queryRaw/$executeRaw. See docs/DATABASE_DESIGN.md.
+  embedding      Unsupported("vector(1536)")?
+
+  @@index([organizationId, agentId])
+  @@unique([sourceId, chunkIndex])
 }
 
 model Membership {

@@ -5,8 +5,8 @@ Status values: `NOT STARTED`, `IN PROGRESS`, `BLOCKED`, `VERIFIED`. This table i
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Audit and architecture | VERIFIED — this document set |
-| 1 | Foundation: app shell, database, auth, orgs, roles, tenant authorization, dashboard layout, landing page, initial tests | See `docs/PHASE_STATUS.md` |
-| 2 | Agent Studio, knowledge ingestion, embeddings, tenant-scoped retrieval | NOT STARTED |
+| 1 | Foundation: app shell, database, auth, orgs, roles, tenant authorization, dashboard layout, landing page, initial tests | VERIFIED |
+| 2 | Agent Studio, knowledge ingestion, embeddings, tenant-scoped retrieval | See `docs/PHASE_STATUS.md` |
 | 3 | Real-time voice MVP, embeddable widget | NOT STARTED |
 | 4 | Usage metering, plans, billing, Paystack webhooks | NOT STARTED |
 | 5 | Analytics, leads, admin console, audit history | NOT STARTED |
@@ -20,10 +20,10 @@ Phases 1–4 are prioritized before telephony, custom voice, or advanced integra
 
 ## Dependencies worth flagging now
 
-- Phase 2 needs an embeddings provider and object storage credentials.
+- Phase 2 needs an `AI_GATEWAY_API_KEY` for real embeddings (everything else — extraction, chunking, SSRF-protected crawling, local storage — already works without it; see `docs/PROVIDER_INTEGRATIONS.md`).
 - Phase 3 needs a realtime voice provider and a decision on allowed embed domains.
 - Phase 4 needs a Paystack account.
 - Phase 6 needs a telephony provider account and verified Ghanaian number availability.
-- Production deployment (any phase) needs a managed Postgres provider and a linked Vercel project — neither exists yet (`docs/DEPLOYMENT_RUNBOOK.md`).
+- Production deployment (any phase) needs a managed Postgres provider with pgvector support, an S3-compatible object storage provider, and a linked Vercel project — none exist yet (`docs/DEPLOYMENT_RUNBOOK.md`).
 
-None of these block Phase 1, which was deliberately scoped to have zero external provider dependencies.
+None of these blocked Phase 1 or the bulk of Phase 2, both deliberately scoped to minimize external provider dependencies.

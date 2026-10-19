@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 1 schema only. Phase 2+ models (Agent, AgentVersion, KnowledgeSource, Chunk/embedding, Conversation, Lead, UsageEvent, Plan, Subscription, AuditLog detail, etc.) are sketched at the bottom as forward-looking plan, **not implemented**.
+Phase 1 + Phase 2 schema implemented (auth/orgs/roles, plus Agent Studio and the knowledge base). Phase 3+ models (Conversation, Lead, UsageEvent, Plan, Subscription) are sketched at the bottom as forward-looking plan, **not implemented**.
 
 ## Provider
 
@@ -71,10 +71,30 @@ Every tenant-owned table carries `organizationId`. The application never accepts
 - `Membership.organizationId` — index (every dashboard query filters by this).
 - `AuditLog.organizationId, createdAt` — composite index for time-ordered audit queries.
 
-## Phase 2+ schema sketch (NOT IMPLEMENTED)
+## Phase 2 schema (implemented)
 
-- `Agent` (organizationId, name, archived) / `AgentVersion` (agentId, instructions, persona, voiceId, languages, publishedAt) — versioned so live conversations aren't affected by in-progress edits.
-- `KnowledgeSource` (organizationId, agentId, type: FILE|URL|FAQ, status), `KnowledgeChunk` (sourceId, content, embedding vector via pgvector).
+### `Agent` / `AgentVersion`
+Versioned so live conversations (Phase 3) won't be affected by in-progress edits. `Agent.publishedVersionId` points at whichever `AgentVersion` is currently live; the latest version with `publishedAt = null` (if any) is the draft being edited. Publishing sets `publishedAt` and repoints `publishedVersionId`; rollback just repoints `publishedVersionId` to an older already-published version — it never mutates history.
+
+| Field (`AgentVersion`) | Type | Notes |
+|---|---|---|
+| agentId | String | FK → Agent |
+| versionNumber | Int | unique per agent, increasing |
+| instructions | String | required |
+| persona / tone / greeting | String? | optional |
+| languages | String[] | defaults to `["en"]` |
+| leadCaptureEnabled | Boolean | |
+| publishedAt | DateTime? | null = draft |
+
+### `KnowledgeSource` / `KnowledgeChunk`
+`KnowledgeSource` tracks one FAQ/manual-text/website-URL/file upload per agent, with a `status` lifecycle (`PENDING → PROCESSING → READY` or `FAILED`, with `errorMessage` set on failure). `KnowledgeChunk` holds the post-chunking text plus its embedding.
+
+The `embedding vector(1536)` column on `KnowledgeChunk` is **not a normal Prisma-managed column** — see `docs/DECISIONS.md` for why (Prisma's classic schema generator has no native pgvector type) and the mandatory operational rule for running migrations on this project (never run bare `prisma migrate dev`). It's declared `Unsupported("vector(1536)")` in `schema.prisma` purely so drift detection doesn't try to drop the column; it's read/written only via `$queryRaw`/`$executeRaw` in `src/server/knowledge/retrieval.ts`. An HNSW cosine-distance index backs the similarity search.
+
+Both tables carry `organizationId` **and** `agentId`, and every retrieval/mutation query filters on both — not just the source/chunk id — mirroring the Phase 1 tenant-isolation pattern. See `tests/integration/knowledge.test.ts` for the test proving a query scoped to Org A never returns Org B's chunks even when both exist.
+
+## Phase 3+ schema sketch (NOT IMPLEMENTED)
+
 - `Conversation` (organizationId, agentVersionId, startedAt, endedAt, outcome), `ConversationEvent` (conversationId, type, payload).
 - `Lead` (organizationId, conversationId, contact fields).
 - `UsageEvent` (organizationId, agentId, conversationId, provider, kind, quantity, costEstimate, idempotencyKey unique) — idempotency key prevents double-counting on retried webhooks.

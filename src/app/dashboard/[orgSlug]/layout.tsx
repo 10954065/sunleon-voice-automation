@@ -10,6 +10,7 @@ export const instant = false;
 
 const NAV_ITEMS = [
   { href: "", label: "Overview" },
+  { href: "/agents", label: "Agents" },
   { href: "/members", label: "Members" },
 ];
 

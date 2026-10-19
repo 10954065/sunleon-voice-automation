@@ -52,6 +52,9 @@ CLAUDE.md
 /prisma/migrations/dev/
 /src/generated/prisma/
 
+# local dev file storage (knowledge source uploads — see src/server/knowledge/storage.ts)
+/.uploads/
+
 # logs
 *.log
 

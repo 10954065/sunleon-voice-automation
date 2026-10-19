@@ -17,7 +17,7 @@ Describes controls implemented in Phase 1, and flags what is explicitly deferred
 - Organization context is resolved via the caller's `Membership` row for the requested org slug. No membership → 403.
 - Role checks (`requireRole([...])`) gate mutating actions. Roles: `SUPER_ADMIN`, `OWNER`, `ADMIN`, `AGENT_MANAGER`, `ANALYST`, matching Part E of the product brief.
 - All tenant-owned Prisma queries filter by `organizationId` sourced from the resolved membership. This is enforced through shared helpers (`src/server/auth/tenant.ts`) rather than left to each call site to remember.
-- **Tested:** `tests/tenant-isolation.test.ts` asserts that a member of Org A cannot read or mutate Org B's data even when supplying Org B's slug/id directly.
+- **Tested:** `tests/integration/tenant-isolation.test.ts` asserts that a member of Org A cannot read or mutate Org B's data even when supplying Org B's slug/id directly. Phase 2 extends this: every `Agent`/`KnowledgeSource`/`KnowledgeChunk` query filters by `organizationId` (not just the record's own id), and `tests/integration/knowledge.test.ts` proves a similarity search scoped to Org A never returns Org B's chunks.
 
 ## Input validation
 
@@ -43,13 +43,19 @@ Describes controls implemented in Phase 1, and flags what is explicitly deferred
 - Transport encryption (TLS) is the responsibility of the hosting platform (Vercel) once deployed; local dev runs over plain HTTP on localhost.
 - At-rest encryption depends on the eventual managed Postgres provider's defaults (e.g., Neon/Vercel Postgres encrypt at rest by default) — to be confirmed once a provider is actually chosen (see `docs/PROVIDER_INTEGRATIONS.md`).
 
-## SSRF and prompt injection
+## SSRF and file-upload safety (Phase 2)
 
-- Not yet applicable: Phase 1 has no website-crawling, file-upload, or LLM-facing features. These protections are required before Phase 2 (knowledge ingestion) and Phase 3 (conversation orchestration) ship, and must be designed in from the start of those phases, not retrofitted.
+- **Website knowledge sources** are fetched through `src/server/knowledge/ssrf.ts`, which blocks: non-HTTP(S) schemes, non-standard ports, `localhost`, and any address that resolves to a private/reserved/loopback/link-local range — including `169.254.169.254` (the AWS/GCP/Azure cloud metadata endpoint). Every redirect hop is re-validated, not just the initial URL (a safe URL can still redirect to an internal address). This is a defense layer, not an exhaustive IP-range database — see the comment in that file.
+- **File uploads** are restricted to an explicit extension allowlist (`pdf`, `docx`, `txt`, `md`, `csv`) and a 10 MB size cap, enforced server-side in `src/server/actions/knowledge.ts` before the file ever reaches the storage adapter or extraction code.
+- **Tested:** `tests/unit/ssrf-shape.test.ts` and `tests/unit/ssrf.test.ts` cover the scheme/port/localhost/metadata-IP/private-IP rejection paths without making real network calls.
+
+## Prompt injection (deferred to Phase 3)
+
+- Knowledge content (FAQs, uploaded documents, crawled web pages) is treated as untrusted input per Part E, but no LLM actually consumes it yet — retrieval (`retrieveRelevantChunks`) just returns matching text chunks; nothing is passed to a model. Prompt-injection defenses (instructing the model to treat retrieved content as data, not instructions) must be designed into the conversation orchestration engine when Phase 3 builds it, not retrofitted after.
 
 ## Dependency risk
 
-- `npm audit` currently reports 5 high-severity advisories, all transitive through `eslint-config-next` → `@next/eslint-plugin-next` → `fast-glob` → `micromatch` → `braces` (a lint-time dev dependency, not shipped to production, not reachable by attacker-controlled input). Fixing requires a breaking downgrade of `eslint-config-next`. Tracked in `docs/KNOWN_LIMITATIONS.md` rather than forced immediately, since the fix would trade a dev-tooling CVE for an unknown-risk breaking change at the very start of the project.
+- `npm audit` currently reports 8 advisories (5 high, 3 moderate): the Phase 1 `eslint-config-next` → `braces` chain (lint-time dev dependency, not shipped to production), plus a new moderate `mammoth` → `argparse` → `sprintf-js` DoS advisory reachable only through `mammoth`'s own CLI tooling, not through its `extractRawText()` API used here. Fixing either requires a breaking downgrade. Tracked in `docs/KNOWN_LIMITATIONS.md` rather than forced immediately.
 
 ## Cross-tenant access tests
 

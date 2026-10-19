@@ -1,3 +1,6 @@
+import Link from "next/link";
+
+import { prisma } from "@/server/db/client";
 import { requireOrgContext } from "@/server/auth/session";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
@@ -11,6 +14,10 @@ export default async function OrgOverviewPage({
   const { orgSlug } = await params;
   const context = await requireOrgContext(orgSlug);
 
+  const agentCount = await prisma.agent.count({
+    where: { organizationId: context.organization.id, archivedAt: null },
+  });
+
   return (
     <div className="max-w-3xl space-y-6">
       <div>
@@ -22,16 +29,16 @@ export default async function OrgOverviewPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>No agents yet</CardTitle>
+          <CardTitle>{agentCount === 0 ? "No agents yet" : `${agentCount} agent${agentCount === 1 ? "" : "s"}`}</CardTitle>
           <CardDescription>
-            Agent creation, knowledge upload, and voice conversations ship in Phase 2 and Phase 3
-            of this build. There is nothing fake to show here in the meantime.
+            Voice conversations ship in Phase 3 of this build — agents can be configured with
+            knowledge now, but can&apos;t hold a real conversation yet.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-stone-500">
-            Once Agent Studio lands, you&apos;ll configure your first agent from this page.
-          </p>
+          <Link href={`/dashboard/${orgSlug}/agents`} className="text-sm font-medium text-amber-700 hover:text-amber-800">
+            {agentCount === 0 ? "Create your first agent →" : "Manage agents →"}
+          </Link>
         </CardContent>
       </Card>
 

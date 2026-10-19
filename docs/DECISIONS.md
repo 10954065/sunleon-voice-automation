@@ -50,6 +50,18 @@ Append-only log of significant decisions. Each entry: date, decision, context, a
 
 ---
 
+## 2026-10-18 — pgvector column/index managed by raw SQL, not Prisma's schema
+
+**Context:** Phase 2 needs a `vector(1536)` column on `KnowledgeChunk` plus an HNSW cosine-distance index for similarity search. Prisma's classic `schema.prisma` generator (what this project uses — see the Prisma 7 decision above) has no native vector column type, and even the `Unsupported("vector(1536)")` escape hatch only covers the *column*, not a custom-opclass index like `USING hnsw (embedding vector_cosine_ops)`.
+
+**Decision:** The `vector` extension, the `embedding` column, and its HNSW index are all created by hand-written raw SQL inside a dedicated migration (`prisma/migrations/..._phase2_pgvector_embedding/migration.sql`). The column is declared in `schema.prisma` as `embedding Unsupported("vector(1536)")?` so Prisma Migrate's drift detection knows the column exists (and won't try to drop it) — but the index has no equivalent declaration available, so it will always look like "drift" to `prisma migrate dev`.
+
+**Operational rule (must follow):** Never run bare `npx prisma migrate dev` in this project. Always use `npx prisma migrate dev --create-only`, inspect the generated `migration.sql`, and **delete the file without applying it** if it contains `DROP INDEX "KnowledgeChunk_embedding_cosine_idx"` (or drops the `embedding` column) — that is Prisma trying to "fix" something it doesn't understand, not a real required change. This is documented again in `docs/DEPLOYMENT_RUNBOOK.md`.
+
+**Alternatives considered:** Prisma's newer `@prisma/orm-extension-pgvector` "contract-authoring" system (a different, parallel schema model with typed `cosineDistance()` query builders) would solve this cleanly, but it's a ground-up departure from the classic `schema.prisma` + `PrismaClient` model already used throughout this project, and appears to still be an early/evolving surface. Adopting it now would be a disproportionate architecture change for one column. Worth revisiting if this friction becomes a recurring problem.
+
+**Consequences:** Anyone running migrations on this project must read this note first. The main risk is a careless `prisma migrate dev` silently destroying the vector index (data loss for retrieval, not for the underlying chunks/content, which stay intact) during local development.
+
 ## 2026-10-18 — No CLAUDE.md, no AI co-authorship trailers in this repository
 
 **Context:** The developer asked that commits to this public repository contain no Claude-specific files and no Claude contribution/co-authorship attribution.

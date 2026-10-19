@@ -2,7 +2,7 @@
 
 A multi-tenant SaaS platform for AI voice agents, built Ghana-first. See [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) for the full product vision and [docs/PHASE_STATUS.md](docs/PHASE_STATUS.md) for what's actually built right now.
 
-This repository is being built in phases — see [docs/IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md). Phase 1 (this state): authentication, organizations, role-based membership, and a tenant-scoped dashboard shell. No AI, voice, or billing features exist yet.
+This repository is being built in phases — see [docs/IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md). Through Phase 2: authentication, organizations, role-based membership, a tenant-scoped dashboard, Agent Studio (versioned instructions, publish/rollback), and a knowledge base (FAQs, text, files, websites → chunked and embedded for retrieval). No real-time voice, billing, or telephony yet.
 
 ## Prerequisites
 
