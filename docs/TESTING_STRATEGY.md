@@ -58,4 +58,6 @@ Verified manually in a real browser (Playwright) in Phase 3, without credentials
 
 ## CI
 
-A GitHub Actions workflow (`.github/workflows/ci.yml`) runs lint, typecheck, unit+integration tests (against a Postgres service container), and the production build on every push, so "automated checks passing" (required before merge per the global git workflow rules) is actually enforced rather than aspirational.
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs migrations, lint, typecheck, unit+integration tests (against a `pgvector/pgvector:pg16` service container), and the production build on every push and pull request.
+
+History, stated honestly: the workflow was first pushed in Phase 2 with a plain `postgres:16-alpine` service, which lacks pgvector, so its first runs failed at `CREATE EXTENSION vector`. This wasn't noticed until Phase 3. Fixed by matching the image to `docker-compose.yml`; check the Actions tab rather than assuming green.

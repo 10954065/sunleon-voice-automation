@@ -11,7 +11,8 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        # Must match docker-compose.yml: migrations need the pgvector extension.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: sunleon
           POSTGRES_PASSWORD: sunleon_dev_password
