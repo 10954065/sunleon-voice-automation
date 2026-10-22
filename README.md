@@ -2,7 +2,7 @@
 
 A multi-tenant SaaS platform for AI voice agents, built Ghana-first. See [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) for the full product vision and [docs/PHASE_STATUS.md](docs/PHASE_STATUS.md) for what's actually built right now.
 
-This repository is being built in phases — see [docs/IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md). Through Phase 2: authentication, organizations, role-based membership, a tenant-scoped dashboard, Agent Studio (versioned instructions, publish/rollback), and a knowledge base (FAQs, text, files, websites → chunked and embedded for retrieval). No real-time voice, billing, or telephony yet.
+This repository is being built in phases — see [docs/IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md). Through Phase 3: authentication, organizations, role-based membership, a tenant-scoped dashboard, Agent Studio (versioned instructions, voice selection, publish/rollback), a knowledge base (FAQs, text, files, websites → chunked and embedded for retrieval), and real-time browser voice (dashboard test calls plus an embeddable iframe widget with per-agent allowed websites, knowledge grounding and lead capture). Live voice and embeddings need `AI_GATEWAY_API_KEY`; without it they fail with a clear message. No billing or telephony yet.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ npm install --ignore-scripts
 docker compose up -d
 cp .env.example .env            # then set AUTH_SECRET: npx auth secret
 npx prisma generate
-npx prisma migrate dev
+npx prisma migrate deploy
 npm run dev
 ```
 
@@ -34,7 +34,7 @@ Install scripts are disabled deliberately on some machines as a supply-chain gua
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run test` | Run the Vitest suite (needs the Postgres container running) |
 | `npm run test:coverage` | Same, with a coverage report |
-| `npm run db:migrate` | `prisma migrate dev` |
+| `npm run db:migrate` | `prisma migrate dev` — read the migration rule in [docs/DECISIONS.md](docs/DECISIONS.md) first; use `npx prisma migrate deploy` to apply |
 | `npm run db:generate` | `prisma generate` |
 
 ## Documentation

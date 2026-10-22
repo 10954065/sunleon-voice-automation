@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 1 + Phase 2 schema implemented (auth/orgs/roles, plus Agent Studio and the knowledge base). Phase 3+ models (Conversation, Lead, UsageEvent, Plan, Subscription) are sketched at the bottom as forward-looking plan, **not implemented**.
+Phase 1–3 schema implemented: auth/orgs/roles, Agent Studio and the knowledge base, and voice sessions (`Conversation`, `UsageEvent`, `Lead`). Phase 4+ models (`Plan`, `Subscription`, billing-grade usage) are sketched at the bottom as a plan, **not implemented**.
 
 ## Provider
 
@@ -84,6 +84,7 @@ Versioned so live conversations (Phase 3) won't be affected by in-progress edits
 | persona / tone / greeting | String? | optional |
 | languages | String[] | defaults to `["en"]` |
 | leadCaptureEnabled | Boolean | |
+| voice | String | added in Phase 3, see below |
 | publishedAt | DateTime? | null = draft |
 
 ### `KnowledgeSource` / `KnowledgeChunk`
@@ -93,9 +94,41 @@ The `embedding vector(1536)` column on `KnowledgeChunk` is **not a normal Prisma
 
 Both tables carry `organizationId` **and** `agentId`, and every retrieval/mutation query filters on both — not just the source/chunk id — mirroring the Phase 1 tenant-isolation pattern. See `tests/integration/knowledge.test.ts` for the test proving a query scoped to Org A never returns Org B's chunks even when both exist.
 
-## Phase 3+ schema sketch (NOT IMPLEMENTED)
+## Phase 3 schema (implemented)
 
-- `Conversation` (organizationId, agentVersionId, startedAt, endedAt, outcome), `ConversationEvent` (conversationId, type, payload).
-- `Lead` (organizationId, conversationId, contact fields).
-- `UsageEvent` (organizationId, agentId, conversationId, provider, kind, quantity, costEstimate, idempotencyKey unique) — idempotency key prevents double-counting on retried webhooks.
+Migrations: `20261019092647_phase3_voice_mvp` and `20261019094202_phase3_conversation_token_issued`. Both had Prisma's spurious `DROP INDEX "KnowledgeChunk_embedding_cosine_idx"` removed before applying, per the rule in `docs/DECISIONS.md`; the index was confirmed intact afterwards.
+
+New columns:
+
+| Table.field | Type | Notes |
+|---|---|---|
+| `Agent.allowedEmbedDomains` | String[] | Bare hostnames the widget may be embedded on. Default empty = embedding blocked. Changed only by OWNER/ADMIN, audit-logged. |
+| `AgentVersion.voice` | String | Default `"alloy"`, validated against the catalog in `src/lib/voice.ts`. Versioned with everything else, so publishing freezes it. |
+
+### `Conversation`
+One row per voice session, test or embedded.
+
+| Field | Type | Notes |
+|---|---|---|
+| id | String | **Server-generated `randomUUID()`**, not cuid — it doubles as the session's bearer reference for the public tool/lead/end routes, so it must be unguessable |
+| organizationId, agentId | String | FKs, cascade on delete. The source of tenant scope for every public voice route |
+| agentVersionId | String | Exactly which configuration ran (draft for TEST, published for EMBED) |
+| channel | `TEST` \| `EMBED` | |
+| status | `ACTIVE` \| `COMPLETED` \| `FAILED` | |
+| originDomain | String? | Embedding site's hostname (from the verified ticket); null for TEST |
+| startedAt / tokenIssuedAt / endedAt | DateTime | `tokenIssuedAt` makes token issuance single-use (atomic claim where it's null) |
+| closeReason, errorMessage | String? | e.g. `user_ended`, `remote_disconnected`, `token_mint_failed` |
+
+### `UsageEvent`
+Append-only event log per conversation: `SESSION_STARTED` (token minted), `SESSION_ENDED` (with `serverDurationSeconds` and a separately labelled `clientReportedSeconds`), `TOOL_CALL` (`search_knowledge`, `capture_lead`), `ERROR` (e.g. mint failure). Indexed by `(organizationId, createdAt)` and `conversationId`.
+
+**Not yet billing-grade:** no `idempotencyKey`, no provider cost, no quantity units. Phase 4 adds those (unique idempotency key so retried webhooks can't double-count) and reconciles durations against the Gateway's own usage data.
+
+### `Lead`
+Visitor-submitted contact details (name/phone/email/note, all optional but at least one contact field is required by validation). `organizationId` and `agentId` are copied from the conversation, never taken from the request. `conversationId` is `SET NULL` on conversation deletion so leads outlive session records.
+
+## Phase 4+ schema sketch (NOT IMPLEMENTED)
+
+- `UsageEvent` additions: `provider`, `kind`, `quantity`, `costEstimate`, `idempotencyKey` (unique).
 - `Plan` / `Subscription` (organizationId, planId, status, currentPeriodUsageMinutes).
+- `ConversationEvent` / stored transcripts with retention policy (Phase 5).

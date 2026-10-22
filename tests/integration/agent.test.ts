@@ -17,8 +17,14 @@ vi.mock("@/server/auth/session", () => ({
   requireCurrentUser: vi.fn(async () => mockContext.user),
 }));
 
-const { createAgent, updateAgentDraft, publishAgentVersion, rollbackAgentVersion, archiveAgent } =
-  await import("@/server/actions/agent");
+const {
+  createAgent,
+  updateAgentDraft,
+  publishAgentVersion,
+  rollbackAgentVersion,
+  archiveAgent,
+  updateEmbedDomains,
+} = await import("@/server/actions/agent");
 
 function formData(fields: Record<string, string | string[]>) {
   const form = new FormData();
@@ -129,6 +135,92 @@ describe("agent actions", () => {
 
     const agent = await prisma.agent.findUniqueOrThrow({ where: { id: created.agentId } });
     expect(agent.publishedVersionId).toBe(v1.id);
+  });
+
+  it("keeps the selected voice when publishing starts a fresh draft", async () => {
+    const created = await createAgent("org-a", formData({ name: "Support Bot" }));
+    if (!created.ok || !created.agentId) throw new Error("expected success");
+
+    await updateAgentDraft(
+      "org-a",
+      created.agentId,
+      formData({ instructions: "v1 instructions", languages: ["en"], leadCaptureEnabled: "", voice: "cedar" })
+    );
+    await publishAgentVersion("org-a", created.agentId);
+    await updateAgentDraft(
+      "org-a",
+      created.agentId,
+      formData({ instructions: "v2 instructions", languages: ["en"], leadCaptureEnabled: "" })
+    );
+
+    const versions = await prisma.agentVersion.findMany({
+      where: { agentId: created.agentId },
+      orderBy: { versionNumber: "asc" },
+    });
+    expect(versions.map((v) => v.voice)).toEqual(["cedar", "cedar"]);
+  });
+
+  it("rejects a voice that isn't in the catalog", async () => {
+    const created = await createAgent("org-a", formData({ name: "Support Bot" }));
+    if (!created.ok || !created.agentId) throw new Error("expected success");
+
+    const result = await updateAgentDraft(
+      "org-a",
+      created.agentId,
+      formData({ instructions: "Valid instructions here", languages: ["en"], leadCaptureEnabled: "", voice: "robot" })
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("lets an owner set embed domains, normalized and de-duplicated, with an audit entry", async () => {
+    const created = await createAgent("org-a", formData({ name: "Support Bot" }));
+    if (!created.ok || !created.agentId) throw new Error("expected success");
+
+    const result = await updateEmbedDomains(
+      "org-a",
+      created.agentId,
+      formData({ domains: "Shop.Example.com\nshop.example.com, www.example.com.gh" })
+    );
+
+    expect(result.ok).toBe(true);
+    const agent = await prisma.agent.findUniqueOrThrow({ where: { id: created.agentId } });
+    expect(agent.allowedEmbedDomains).toEqual(["shop.example.com", "www.example.com.gh"]);
+    const audit = await prisma.auditLog.findFirstOrThrow({ where: { action: "agent.embed_domains_updated" } });
+    expect(audit.actorUserId).toBe(mockContext.user.id);
+  });
+
+  it("rejects embed entries that are URLs or wildcards rather than bare hostnames", async () => {
+    const created = await createAgent("org-a", formData({ name: "Support Bot" }));
+    if (!created.ok || !created.agentId) throw new Error("expected success");
+
+    const asUrl = await updateEmbedDomains("org-a", created.agentId, formData({ domains: "https://example.com" }));
+    const asWildcard = await updateEmbedDomains("org-a", created.agentId, formData({ domains: "*.example.com" }));
+
+    expect(asUrl.ok).toBe(false);
+    expect(asWildcard.ok).toBe(false);
+  });
+
+  it("does not let an agent manager change where the widget may run", async () => {
+    const created = await createAgent("org-a", formData({ name: "Support Bot" }));
+    if (!created.ok || !created.agentId) throw new Error("expected success");
+    mockContext = { ...mockContext, role: "AGENT_MANAGER" };
+
+    await expect(
+      updateEmbedDomains("org-a", created.agentId, formData({ domains: "example.com" }))
+    ).rejects.toThrow(/requires one of/);
+  });
+
+  it("does not let an owner of another org change this org's embed domains", async () => {
+    const created = await createAgent("org-a", formData({ name: "Support Bot" }));
+    if (!created.ok || !created.agentId) throw new Error("expected success");
+    const orgB = await prisma.organization.create({ data: { name: "Org B", slug: "org-b" } });
+    mockContext = { ...mockContext, organization: orgB };
+
+    const result = await updateEmbedDomains("org-b", created.agentId, formData({ domains: "attacker.net" }));
+
+    expect(result.ok).toBe(false);
+    const agent = await prisma.agent.findUniqueOrThrow({ where: { id: created.agentId } });
+    expect(agent.allowedEmbedDomains).toEqual([]);
   });
 
   it("rejects an ANALYST trying to create an agent", async () => {

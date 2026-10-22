@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { VOICE_IDS } from "@/lib/voice";
+
 export const createAgentSchema = z.object({
   name: z.string().trim().min(2, "Agent name must be at least 2 characters").max(120),
 });
@@ -11,6 +13,7 @@ export const updateAgentDraftSchema = z.object({
   greeting: z.string().trim().max(500).optional().or(z.literal("")),
   languages: z.array(z.string().trim().min(2).max(10)).min(1, "Select at least one language"),
   leadCaptureEnabled: z.boolean(),
+  voice: z.enum(VOICE_IDS, { message: "Choose a voice from the list" }).optional(),
 });
 
 export type CreateAgentInput = z.infer<typeof createAgentSchema>;

@@ -4,6 +4,7 @@ import { prisma } from "@/server/db/client";
 import { requireOrgContext } from "@/server/auth/session";
 import { requireRole } from "@/server/auth/tenant";
 import { createAgentSchema, updateAgentDraftSchema } from "@/lib/validation/agent";
+import { embedDomainsSchema } from "@/lib/validation/voice";
 
 export type AgentActionResult = { ok: true; agentId?: string } | { ok: false; error: string };
 
@@ -65,6 +66,7 @@ async function getOrCreateDraftVersion(agentId: string) {
       greeting: latest?.greeting,
       languages: latest?.languages ?? ["en"],
       leadCaptureEnabled: latest?.leadCaptureEnabled ?? false,
+      voice: latest?.voice,
     },
   });
 }
@@ -91,6 +93,7 @@ export async function updateAgentDraft(
     greeting: formData.get("greeting") ?? "",
     languages: formData.getAll("languages"),
     leadCaptureEnabled: formData.get("leadCaptureEnabled") === "on",
+    voice: formData.get("voice") ?? undefined,
   });
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input." };
@@ -107,6 +110,7 @@ export async function updateAgentDraft(
       greeting: parsed.data.greeting || null,
       languages: parsed.data.languages,
       leadCaptureEnabled: parsed.data.leadCaptureEnabled,
+      ...(parsed.data.voice && { voice: parsed.data.voice }),
     },
   });
 
@@ -180,6 +184,44 @@ export async function rollbackAgentVersion(
   });
 
   return { ok: true, agentId };
+}
+
+export async function updateEmbedDomains(
+  organizationSlug: string,
+  agentId: string,
+  formData: FormData
+): Promise<AgentActionResult> {
+  const context = await requireOrgContext(organizationSlug);
+  requireRole(context.role, ["OWNER", "ADMIN"]);
+
+  const agent = await prisma.agent.findFirst({
+    where: { id: agentId, organizationId: context.organization.id },
+  });
+  if (!agent) {
+    return { ok: false, error: "Agent not found in this organization." };
+  }
+
+  const raw = String(formData.get("domains") ?? "");
+  const entries = raw.split(/[\s,]+/).filter(Boolean);
+  const parsed = embedDomainsSchema.safeParse(entries);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid domains." };
+  }
+  const domains = Array.from(new Set(parsed.data));
+
+  await prisma.$transaction(async (tx) => {
+    await tx.agent.update({ where: { id: agent.id }, data: { allowedEmbedDomains: domains } });
+    await tx.auditLog.create({
+      data: {
+        organizationId: context.organization.id,
+        actorUserId: context.user.id,
+        action: "agent.embed_domains_updated",
+        metadata: { agentId: agent.id, domains },
+      },
+    });
+  });
+
+  return { ok: true, agentId: agent.id };
 }
 
 export async function archiveAgent(

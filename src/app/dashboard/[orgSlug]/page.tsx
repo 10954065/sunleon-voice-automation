@@ -31,8 +31,8 @@ export default async function OrgOverviewPage({
         <CardHeader>
           <CardTitle>{agentCount === 0 ? "No agents yet" : `${agentCount} agent${agentCount === 1 ? "" : "s"}`}</CardTitle>
           <CardDescription>
-            Voice conversations ship in Phase 3 of this build — agents can be configured with
-            knowledge now, but can&apos;t hold a real conversation yet.
+            Configure each agent&apos;s instructions, knowledge and voice, test it in your browser, then
+            embed it on your website.
           </CardDescription>
         </CardHeader>
         <CardContent>

@@ -28,8 +28,8 @@ export function CreateOrganizationForm() {
   return (
     <form action={handleSubmit} className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="name">Business name</Label>
-        <Input id="name" name="name" placeholder="e.g. Kente & Co." required />
+        <Label htmlFor="organization-name">Business name</Label>
+        <Input id="organization-name" name="name" placeholder="e.g. Kente & Co." required />
       </div>
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       <Button type="submit" className="w-full" disabled={isPending}>

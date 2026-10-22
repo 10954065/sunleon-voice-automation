@@ -40,21 +40,26 @@ model Organization {
   auditLogs        AuditLog[]
   agents           Agent[]
   knowledgeSources KnowledgeSource[]
+  conversations    Conversation[]
+  leads            Lead[]
 }
 
 model Agent {
-  id                 String         @id @default(cuid())
-  organizationId     String
-  name               String
-  archivedAt         DateTime?
-  publishedVersionId String?        @unique
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  id                   String         @id @default(cuid())
+  organizationId       String
+  name                 String
+  archivedAt           DateTime?
+  publishedVersionId   String?        @unique
+  allowedEmbedDomains  String[]       @default([])
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
 
-  organization       Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  versions           AgentVersion[] @relation("AgentVersions")
-  publishedVersion   AgentVersion?  @relation("PublishedVersion", fields: [publishedVersionId], references: [id])
-  knowledgeSources    KnowledgeSource[]
+  organization         Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  versions             AgentVersion[]    @relation("AgentVersions")
+  publishedVersion     AgentVersion?     @relation("PublishedVersion", fields: [publishedVersionId], references: [id])
+  knowledgeSources     KnowledgeSource[]
+  conversations        Conversation[]
+  leads                Lead[]
 
   @@index([organizationId])
 }
@@ -69,14 +74,91 @@ model AgentVersion {
   greeting             String?
   languages            String[] @default(["en"])
   leadCaptureEnabled   Boolean  @default(false)
+  voice                String   @default("alloy")
   createdAt            DateTime @default(now())
   publishedAt          DateTime?
 
   agent                Agent    @relation("AgentVersions", fields: [agentId], references: [id], onDelete: Cascade)
   publishedByAgent      Agent?   @relation("PublishedVersion")
+  conversations         Conversation[]
 
   @@unique([agentId, versionNumber])
   @@index([agentId])
+}
+
+enum ConversationChannel {
+  TEST
+  EMBED
+}
+
+enum ConversationStatus {
+  ACTIVE
+  COMPLETED
+  FAILED
+}
+
+model Conversation {
+  id             String              @id @default(cuid())
+  organizationId String
+  agentId        String
+  agentVersionId String
+  channel        ConversationChannel
+  status         ConversationStatus  @default(ACTIVE)
+  originDomain   String?
+  startedAt      DateTime            @default(now())
+  tokenIssuedAt  DateTime?
+  endedAt        DateTime?
+  closeReason    String?
+  errorMessage   String?
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent          Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agentVersion   AgentVersion  @relation(fields: [agentVersionId], references: [id], onDelete: Cascade)
+  usageEvents    UsageEvent[]
+  leads          Lead[]
+
+  @@index([organizationId, agentId])
+  @@index([agentId, startedAt])
+}
+
+enum UsageEventType {
+  SESSION_STARTED
+  SESSION_ENDED
+  TOOL_CALL
+  ERROR
+}
+
+model UsageEvent {
+  id             String         @id @default(cuid())
+  organizationId String
+  agentId        String
+  conversationId String
+  type           UsageEventType
+  metadata       Json?
+  createdAt      DateTime       @default(now())
+
+  conversation   Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([conversationId])
+}
+
+model Lead {
+  id             String        @id @default(cuid())
+  organizationId String
+  agentId        String
+  conversationId String?
+  name           String?
+  phone          String?
+  email          String?
+  note           String?
+  createdAt      DateTime      @default(now())
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent          Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, agentId])
 }
 
 enum KnowledgeSourceType {

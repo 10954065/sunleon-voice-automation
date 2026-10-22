@@ -37,8 +37,8 @@ export function SignUpForm() {
   return (
     <form action={handleSubmit} className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="name">Full name</Label>
-        <Input id="name" name="name" autoComplete="name" required />
+        <Label htmlFor="sign-up-name">Full name</Label>
+        <Input id="sign-up-name" name="name" autoComplete="name" required />
       </div>
       <div className="space-y-2">
         <Label htmlFor="email">Email</Label>

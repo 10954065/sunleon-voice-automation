@@ -28,8 +28,8 @@ export function CreateAgentForm({ orgSlug }: { orgSlug: string }) {
   return (
     <form action={handleSubmit} className="flex items-end gap-3">
       <div className="flex-1 space-y-2">
-        <Label htmlFor="name">Agent name</Label>
-        <Input id="name" name="name" placeholder="e.g. Support Assistant" required />
+        <Label htmlFor="agent-name">Agent name</Label>
+        <Input id="agent-name" name="name" placeholder="e.g. Support Assistant" required />
       </div>
       <Button type="submit" disabled={isPending}>
         {isPending ? "Creating…" : "Create agent"}

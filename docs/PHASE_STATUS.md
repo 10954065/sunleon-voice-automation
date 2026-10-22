@@ -1,13 +1,13 @@
 # Phase Status — Sunleon Voice
 
-Last updated: 2026-10-19 (Phase 2 implementation).
+Last updated: 2026-10-22 (Phase 3 implementation).
 
 | Phase | Status |
 |---|---|
 | 0 — Audit and architecture | VERIFIED |
 | 1 — Foundation and authentication | VERIFIED |
 | 2 — Agent Studio and knowledge ingestion | VERIFIED (embeddings credential-blocked — see below) |
-| 3 — Real-time AI voice MVP | NOT STARTED |
+| 3 — Real-time AI voice MVP | BLOCKED — built and tested up to the provider; live conversation needs `AI_GATEWAY_API_KEY` (see below) |
 | 4 — Usage, plans, and billing | NOT STARTED |
 | 5 — Analytics and operational controls | NOT STARTED |
 | 6 — Telephony | NOT STARTED |
@@ -154,6 +154,80 @@ See `docs/KNOWN_LIMITATIONS.md` in full. Highlights: no embedding credential con
 2. To unblock real embeddings: get an `AI_GATEWAY_API_KEY` from vercel.com and set it in `.env`. No code change needed.
 3. Read the "Never run bare `npx prisma migrate dev`" rule in `docs/DECISIONS.md` and `docs/DEPLOYMENT_RUNBOOK.md` before touching the schema.
 
-### Phase 3 acceptance criteria (for reference, not yet attempted)
+## Phase 3 — Real-time AI voice MVP: BLOCKED (live conversation needs `AI_GATEWAY_API_KEY`)
 
-A real browser can complete a real voice conversation with knowledge-based answers when credentials are configured. No permanent secret is exposed. Missing credentials are documented as blockers rather than mocked success.
+Everything up to the provider boundary is built, tested against real Postgres, and checked in a real browser. The spoken conversation itself has **not** been tested, because no credential is configured. Per the brief, that is reported as a blocker, not as success.
+
+### What was built
+
+- **Provider adapter** (`src/server/voice/provider.ts`): `openai/gpt-realtime-2` through the Vercel AI Gateway realtime API, using the same `AI_GATEWAY_API_KEY` as Phase 2. It mints single-use, 60-second client secrets; the key never reaches the browser.
+- **Secure session flow** (`src/server/voice/session.ts`, `src/app/api/voice/**`): prepare (dashboard auth + role, or signed embed ticket) → `Conversation` with a server-generated UUID → token route with atomic single-use issuance within 2 minutes → end route. Usage events: `SESSION_STARTED`, `SESSION_ENDED` (server duration plus a separately labelled client-reported duration), `TOOL_CALL`, `ERROR`.
+- **Widget** (`src/components/voice-widget/*`, built on the AI SDK's `experimental_useRealtime`): consent and privacy notice; microphone permission with specific messages for denied, missing or busy microphones; connection states (connecting / listening / agent speaking); spoken replies; server VAD turn-taking and barge-in; an optional live transcript of the agent's speech; end call; a 15-minute client-side cap; cleanup on tab close and on navigation away; "Try again" starts a fresh session.
+- **Embedding**: public iframe page `/widget/[agentId]` that checks the browser-set `Referer` against the agent's allowlist and issues an HMAC ticket. Agent Studio gains an "Allowed websites" editor (OWNER/ADMIN, audit-logged) and a copyable `<iframe allow="microphone">` snippet once published.
+- **Knowledge grounding**: a bounded summary of READY knowledge in the instructions, plus a `search_knowledge` realtime tool executed against tenant-scoped pgvector retrieval. Instructions put platform rules first and fence knowledge as reference data.
+- **Lead capture**: a form the visitor fills in themselves (not a model tool), only when enabled on the version that ran, after a session has started, at most 3 per conversation.
+- **Agent Studio**: a voice picker (OpenAI's 10 documented realtime voices, labelled as unevaluated for Ghanaian English), a "Test voice" panel that tests the latest draft, "Recent voice sessions" (with failure reasons) and "Leads" lists.
+- **Fixes found along the way**: `.env.example` had never been committed (the `.env*` ignore rule swallowed it); duplicate `id="name"` on three forms broke label association after client-side navigation; stale "voice comes in a later phase" copy; `SECURITY_MODEL.md` wrongly said sessions were database-backed (they're JWT).
+
+### Acceptance criteria (from the master build prompt) — status
+
+| Criterion | Status |
+|---|---|
+| A real browser completes a real voice conversation with knowledge-based answers when credentials are configured | **BLOCKED** — no `AI_GATEWAY_API_KEY`. All code paths up to the provider are built and tested. |
+| No permanent secret is exposed | **Met** — key is server-only; browser receives single-use 60 s secrets; public errors never mention configuration (tested). |
+| Missing credentials are documented as blockers rather than mocked success | **Met** — honest blocker messages verified in the browser; real token route tested failing with 503 and marking the conversation FAILED. |
+
+### Quality gates — actual results
+
+- `npx tsc --noEmit`: clean.
+- `npx eslint`: 0 errors. One warning, from the generated `coverage/` report folder; a config-protection hook blocks adding it to the ESLint ignores, and it doesn't affect CI, which lints before coverage exists.
+- `npx vitest run --coverage`: **158 tests in 25 files, all passing.** Statements 77.92%, lines 78.05%, `src/server/voice` 94.1%. Below the 80% target for the same reasons as Phase 2 (Auth.js wrappers, real-network fetcher branches, PDF/DOCX extraction).
+- `npm run build`: succeeds; all six voice API routes and `/widget/[agentId]` present.
+- Migrations: `20261019092647_phase3_voice_mvp`, `20261019094202_phase3_conversation_token_issued` — reviewed, Prisma's spurious `DROP INDEX` removed from both, applied with `migrate deploy`, pgvector index confirmed intact.
+- Security review (separate reviewer agent): one HIGH (cost abuse via spoofable IP key and ticket replay), one MEDIUM (leads accepted without a started session), one LOW (raw provider errors to dashboard users). All three fixed and covered by tests: a per-agent preparation ceiling that no header can influence, a started-session requirement for leads, and truncated dashboard errors. A separate code-quality review was stopped before it reported; the widget lifecycle was then self-reviewed (it found and fixed missing microphone/session cleanup on client-side navigation).
+
+### Manual verification (real browser, via Playwright, no credentials)
+
+- Sign-up → workspace → agent → instructions, Cedar voice, lead capture → save → publish → allowed website `localhost` → embed snippet shown with the correct URL.
+- Dashboard "Test voice" with microphone granted: shows *"Voice is not configured: AI_GATEWAY_API_KEY is not set…"*, and no session row is created.
+- Microphone denied: *"Microphone access was blocked. Allow microphone access for this page in your browser, then try again."*
+- Embedded on a stand-in business page at `localhost:8788` (allowed): consent screen; starting shows *"Voice is temporarily unavailable"* (no configuration details).
+- The same page at `127.0.0.1:8788` (not allowed), a direct visit to `/widget/<id>`, and an unknown agent id all show the identical *"This voice assistant isn't available on this page."*
+- The widget page HTML contains the consent text and ticket but **not** the business instructions or greeting.
+
+### Live-session checklist — run once `AI_GATEWAY_API_KEY` is set
+
+1. Dashboard test call connects; the agent greets with the configured greeting in the selected voice.
+2. Ask a question answered only by a READY knowledge source → correct answer; a `TOOL_CALL` usage event appears.
+3. Talk over the agent → playback stops (barge-in).
+4. Ask something not in the knowledge → the agent says it doesn't know and offers a human; it doesn't invent an answer.
+5. End the call → session shows `completed` with a duration; `SESSION_ENDED` carries `clientReportedSeconds`.
+6. Repeat 1–5 through the embed snippet on an allowed host; submit a lead → it appears under Leads.
+7. Listen for Ghanaian-English pronunciation of local names, places and cedi amounts; record findings (Decision 3) before claiming any quality.
+
+### Security controls implemented (new this phase)
+
+Single-use, short-lived provider secrets; server-generated UUID conversation ids; tenant scope derived only from the conversation row on public routes; Referer allowlist plus HMAC embed tickets with an allowlist re-check; published-only public path; OWNER/ADMIN-only, audit-logged allowlist changes; public error hygiene; per-IP and per-agent rate limits; lead capture gated on a started session and the version's setting; prompt-injection framing. Full detail in `docs/SECURITY_MODEL.md`.
+
+### Required environment variables
+
+No new variables. `AI_GATEWAY_API_KEY` now also powers voice and needs access to `openai/gpt-realtime-2`. `NEXTAUTH_URL` is also the base URL shown in embed snippets.
+
+### External accounts/credentials still needed
+
+- `AI_GATEWAY_API_KEY` (Vercel) — unblocks both Phase 2 embeddings and Phase 3 voice.
+- Before production: managed Postgres with pgvector, S3-compatible storage, a durable rate limiter (e.g. Upstash Redis), and a linked Vercel project.
+
+### Known limitations / blockers
+
+See `docs/KNOWN_LIMITATIONS.md` → "Phase 3 — real-time voice". The most important ones: instructions are visible to callers (the Gateway applies session config from the browser), session length is capped only client-side, usage isn't billing-grade, and rate limiting is per-process.
+
+### Manual steps for the developer
+
+1. Set `AI_GATEWAY_API_KEY` in `.env`, restart `npm run dev`, then run the live-session checklist above.
+2. Apply migrations with `npx prisma migrate deploy` (never answer `migrate dev`'s prompt — see `docs/DECISIONS.md`).
+3. Note that `npm run test` wipes the local dev database.
+
+### Phase 4 acceptance criteria (for reference, not yet attempted)
+
+Usage is correctly attributed, duplicate events cannot double-count, entitlements are enforced, and usage exhaustion cannot create uncontrolled bills.

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { updateAgentDraft } from "@/server/actions/agent";
+import { VOICE_CATALOG } from "@/lib/voice";
 
 const LANGUAGE_OPTIONS = [
   { code: "en", label: "English (Ghanaian)" },
@@ -22,6 +23,7 @@ type DraftLike = {
   greeting: string | null;
   languages: string[];
   leadCaptureEnabled: boolean;
+  voice: string;
 } | null;
 
 export function AgentDraftForm({
@@ -58,6 +60,10 @@ export function AgentDraftForm({
     <form action={handleSubmit} className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="instructions">Instructions</Label>
+        <p className="text-xs text-stone-500">
+          Sent to the caller&apos;s browser to configure each voice session. Don&apos;t include anything you
+          wouldn&apos;t want a caller to see.
+        </p>
         <textarea
           id="instructions"
           name="instructions"
@@ -98,6 +104,26 @@ export function AgentDraftForm({
             </label>
           ))}
         </div>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="voice">Voice</Label>
+        <select
+          id="voice"
+          name="voice"
+          defaultValue={draft?.voice ?? "marin"}
+          disabled={readOnly}
+          className="w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 disabled:opacity-60"
+        >
+          {VOICE_CATALOG.map((voice) => (
+            <option key={voice.id} value={voice.id}>
+              {voice.label}
+              {voice.recommended ? " (recommended)" : ""}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-stone-500">
+          OpenAI built-in voices. None has been evaluated for Ghanaian English yet — test before publishing.
+        </p>
       </div>
       <label className="flex items-center gap-2 text-sm text-stone-700">
         <input

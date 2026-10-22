@@ -69,3 +69,53 @@ Append-only log of significant decisions. Each entry: date, decision, context, a
 **Decision:** `.gitignore` excludes `CLAUDE.md` and `.claude/` anywhere in the tree. `includeCoAuthoredBy` is already `false` in the local Claude Code settings, so commit messages carry no `Co-Authored-By` trailer.
 
 **Consequences:** No AI-authorship disclosure appears in the repository's git history or files.
+
+---
+
+## 2026-10-19 — Real-time voice through the Vercel AI Gateway, not a direct OpenAI integration
+
+**Context:** Phase 3 needs speech-to-speech conversation in the browser with short-lived credentials. Candidates: OpenAI's Realtime API directly (WebRTC + ephemeral keys), or the AI Gateway's realtime API through the AI SDK.
+
+**Decision:** `openai/gpt-realtime-2` through the AI Gateway (`gateway.experimental_realtime`), with `experimental_useRealtime` from `@ai-sdk/react` in the browser. The API surface was checked against the installed packages' type definitions and compiled source, not only the docs: `onToolCall`/`addToolOutput`, the `RealtimeSetupResponse` shape, single-use 60-second client secrets, and barge-in handling.
+
+**Why:** It reuses the `AI_GATEWAY_API_KEY` the project already depends on (one credential, one bill, one provider adapter pattern). The SDK owns microphone capture, PCM resampling, playback, VAD turn-taking and interruption, which would otherwise be a large amount of hand-written audio code. Swapping the underlying model later is a model-string change.
+
+**Trade-offs accepted:** The API is marked `experimental_`, so pin and re-test on upgrade. The only connection mode is client-secret WebSocket (no WebRTC on this path), and session config cannot be fixed server-side — see the next entry.
+
+## 2026-10-19 — Instructions travel through the caller's browser (accepted, documented limitation)
+
+**Context:** `GatewayRealtimeModel.doCreateClientSecret` deliberately ignores `sessionConfig`; instructions, voice and tools are applied by the browser's `session-update` event. The brief says the embed snippet must not expose "private instructions".
+
+**Decision:** Keep instructions out of the embed snippet and the widget page HTML (verified), and release them only after the embed ticket and allowlist checks pass. Accept that a technical caller can read them during their own session, warn businesses about this in the draft form, and record it in `docs/KNOWN_LIMITATIONS.md`. Real confidentiality needs a server-side relay, which the Gateway model doesn't offer through the AI SDK today; that is a Phase 8 / dedicated-voice-worker question.
+
+## 2026-10-19 — Two-step session flow with single-use token issuance
+
+**Decision:** Step 1 ("prepare": dashboard auth or embed ticket) creates the `Conversation` with a server-generated `randomUUID()` and returns the session config. Step 2 is the URL handed to the hook's `api.token`; it atomically claims `tokenIssuedAt` (only if null and within 2 minutes of preparation), then mints.
+
+**Why:** The hook fetches its own token from a fixed URL, so the conversation must exist before the hook mounts. The id is a bearer reference for the tool and lead routes, so it must be unguessable (cuid isn't). Single-use issuance stops a leaked id being replayed to open more provider sessions. Because React Strict Mode mounts effects twice, the widget defers `connect()` with a timer the effect cleanup cancels; otherwise the second mount would hit the single-use guard.
+
+## 2026-10-19 — Embedding via iframe, authorized by Referer plus a signed ticket
+
+**Context:** Requests made from inside an iframe carry the *widget's* origin, not the embedding site's, so an `Origin` allowlist on the API cannot tell which site embedded the widget.
+
+**Decision:** The widget is an iframe page (`/widget/[agentId]`) served from our domain, which also isolates it from the host page's CSS and scripts. On that page load, the browser sets `Referer` to the embedding page — something the embedding page cannot forge. If its hostname exactly matches the agent's allowlist (an empty list denies), the page issues an HMAC-signed ticket (`AUTH_SECRET`, 10-minute TTL, bound to agent and host). The public prepare route requires the ticket and re-checks the allowlist.
+
+**Limits:** This stops other websites from using the widget in real visitors' browsers; it does not stop a non-browser client from forging `Referer`. Rate limits and Phase 4 quotas are the controls for direct abuse. Embedders must not set `referrerpolicy="no-referrer"` (the UI says so).
+
+## 2026-10-19 — Lead capture is a visitor-submitted form, not a model tool
+
+**Decision:** Contact details are submitted by the visitor through a form in the widget. The model cannot call a "capture lead" tool.
+
+**Why:** The visitor explicitly chooses what to share (consent), nothing depends on the model deciding correctly when to store personal data, and the server enforces `leadCaptureEnabled` on the version that ran plus a cap of 3 leads per conversation.
+
+## 2026-10-19 — Knowledge grounding: bounded summary plus a search tool
+
+**Decision:** Session instructions include up to 4,000 characters of knowledge from READY sources only, and the model also gets a `search_knowledge` tool. The browser executes the tool against `/api/voice/tools/search-knowledge`, which derives tenant scope solely from the conversation row.
+
+**Why:** The summary works with no extra round trip and covers small knowledge bases; the tool covers anything larger. Knowledge from FAILED or half-processed sources never grounds a live answer.
+
+## 2026-10-19 — Apply migrations with `migrate deploy`; never answer `migrate dev`'s prompt
+
+**Context:** After applying, bare `prisma migrate dev` re-diffs, sees the pgvector index "drift" again, and asks for a new migration name. In a non-interactive shell that prompt never returns, and the orphaned processes held Postgres's migration advisory lock until they were found and stopped.
+
+**Rule:** Generate with `npx prisma migrate dev --create-only --name <name>`, inspect and strip any `DROP INDEX "KnowledgeChunk_embedding_cosine_idx"`, then apply with `npx prisma migrate deploy`.

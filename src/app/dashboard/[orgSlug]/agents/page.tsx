@@ -28,8 +28,8 @@ export default async function AgentsPage({
       <div>
         <h1 className="text-2xl font-semibold text-stone-950">Agents</h1>
         <p className="mt-1 text-sm text-stone-500">
-          Configure instructions and knowledge for each agent. Testing conversations and
-          voice land in a later phase.
+          Configure instructions, knowledge and voice for each agent, test it by voice, and embed it on
+          your website.
         </p>
       </div>
 

@@ -2,9 +2,9 @@
 
 ## Status
 
-**Phase 1 had zero external provider dependencies by design.** Phase 2 adds exactly one: an embeddings provider, behind an adapter, with no live credential configured in this environment — document extraction, chunking, and SSRF-protected crawling are all real, local, credential-free functionality; only the embedding step needs a key.
+**Phase 1 had zero external provider dependencies by design.** Phase 2 added an embeddings provider behind an adapter. Phase 3 adds real-time voice through the **same** provider (Vercel AI Gateway) and the same key. No live credential is configured in this environment, so both are implemented and tested up to the provider boundary, and the live calls are BLOCKED.
 
-Everything below Phase 2 is still an **evaluation plan** for later phases, not a claim that those integrations exist or that pricing/capabilities have been verified against current provider documentation. Each will be re-verified against official docs immediately before it is implemented, per Part D: "Use official, current provider documentation... Never invent APIs or assume an account has access to a feature."
+Everything below Phase 3 is still an **evaluation plan** for later phases, not a claim that those integrations exist or that pricing/capabilities have been verified against current provider documentation. Each will be re-verified against official docs immediately before it is implemented, per Part D: "Use official, current provider documentation... Never invent APIs or assume an account has access to a feature."
 
 ## Phase 2 — Knowledge ingestion & retrieval (implemented)
 
@@ -16,14 +16,23 @@ Everything below Phase 2 is still an **evaluation plan** for later phases, not a
 | Vector storage | pgvector extension, `pgvector/pgvector:pg16` Docker image locally | Production needs a managed Postgres provider that supports the `vector` extension (Neon and Vercel Postgres both do) — not yet provisioned. |
 | File storage | Local disk (`src/server/knowledge/storage.ts`, `.uploads/`, gitignored) | Explicitly dev-only and documented as such. Must be swapped for an S3-compatible adapter (Vercel Blob / R2 / S3) before production — the `StorageAdapter` interface is already shaped for that swap. |
 
-## Phase 3 — Real-time voice MVP
+## Phase 3 — Real-time voice MVP (implemented; live session BLOCKED on credentials)
 
-| Need | Candidates to evaluate | Notes |
+| Need | What's actually used | Notes |
 |---|---|---|
-| Real-time voice (speech ⇄ speech) | OpenAI Realtime API, or a comparable WebRTC-based provider | Must verify current region support, language/voice catalog, and session-token model before building the adapter |
-| Transport | WebRTC (officially supported real-time protocol per the spec) | |
+| Speech ⇄ speech model | `openai/gpt-realtime-2` through the **Vercel AI Gateway realtime API** (`gateway.experimental_realtime` from `@ai-sdk/gateway` 4.0.116) | Same `AI_GATEWAY_API_KEY` as Phase 2 embeddings — no second provider account. Chosen over a direct OpenAI integration; see `docs/DECISIONS.md`. |
+| Browser client | `experimental_useRealtime` from `@ai-sdk/react` 4.0.147 | Handles microphone capture (24 kHz PCM), playback, server VAD turn-taking, and barge-in (on `speech-started` it stops playback and sends `conversation-item-truncate` — read in the installed SDK source, not assumed). |
+| Transport | Client-secret **WebSocket** (`ai-gateway-auth.<token>` subprotocol) | The brief allows "WebRTC when appropriate". The Gateway realtime model only supports client-secret WebSocket, so WebRTC isn't available on this path. |
+| Session credential | Single-use Gateway client secret, 60-second expiry, minted server-side by `src/server/voice/provider.ts` | `AI_GATEWAY_API_KEY` never leaves the server. Our own token route also enforces single-use issuance per conversation within a 2-minute window. |
+| Voices | OpenAI built-in realtime voices: marin, cedar (recommended), alloy, ash, ballad, coral, echo, sage, shimmer, verse | From OpenAI's realtime API reference (checked 2026-10-19). **Not yet heard through the Gateway** (no credentials), and **none evaluated for Ghanaian English** — Decision 3 of the brief. |
+| Knowledge grounding | Bounded summary of READY knowledge in the session instructions, plus a `search_knowledge` realtime tool executed against our tenant-scoped pgvector retrieval | The tool needs embeddings, so the same `AI_GATEWAY_API_KEY`. |
 
-Session tokens must be short-lived and minted server-side; the embed widget never receives a permanent provider key (Part F.6, Part E).
+What is verified vs. not, precisely:
+
+- **Verified (tests and a real browser, without credentials):** consent → microphone permission → session preparation → error states; permission-denied message; the honest "Voice is not configured" blocker for dashboard users and the generic "temporarily unavailable" message for public visitors; embed authorization (allowed host shows the widget; a non-allowed host, a direct visit, and an unknown agent all show the same "not available" message); private instructions absent from the widget page HTML; single-use token issuance; tenant-isolated knowledge search; lead capture.
+- **Not verified — BLOCKED on `AI_GATEWAY_API_KEY`:** an actual spoken conversation. That covers the Gateway accepting our session config, the voices sounding as named, tool calls arriving and being answered mid-call, interruption behaving well, and usage events (`session-usage`/`session-closed`) arriving. Every one of these must be checked in the first credentialed session; see `docs/PHASE_STATUS.md` for the checklist.
+
+Important constraint found while building: the Gateway realtime model **ignores `sessionConfig` passed at mint time** (comment and code in `@ai-sdk/gateway`'s `GatewayRealtimeModel.doCreateClientSecret`). Instructions, voice and tools are applied by the browser's `session-update` event, so business instructions necessarily pass through the caller's browser. See `docs/SECURITY_MODEL.md` and `docs/DECISIONS.md`.
 
 ## Phase 4 — Billing
 
@@ -49,9 +58,8 @@ Session tokens must be short-lived and minted server-side; the embed widget neve
 
 ## Credentials needed from the developer, by phase
 
-- **Phase 2 (now):** `AI_GATEWAY_API_KEY` — the only thing currently blocked. Everything else (extraction, chunking, SSRF-protected crawling, local file storage) works without it.
+- **Phases 2 and 3 (now):** `AI_GATEWAY_API_KEY` — one key unblocks both real embeddings and real voice sessions. It must have access to `openai/gpt-realtime-2` on the Gateway (check the Gateway model list for your team). Allowed embed domains are configured per agent in Agent Studio, not via env vars.
 - **Before production (any phase):** a managed Postgres provider with pgvector support, an S3-compatible object storage provider (to replace the local-disk adapter), and a linked Vercel project.
-- **Phase 3:** realtime voice provider API key, domain(s) to allow-list for the embed widget.
 - **Phase 4:** Paystack account + API keys, webhook signing secret.
 - **Phase 6:** telephony provider account + API keys, phone number provisioning.
 
