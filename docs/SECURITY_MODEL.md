@@ -2,7 +2,7 @@
 
 ## Status
 
-Describes controls implemented through Phase 3, and flags what is explicitly deferred (with the phase that will add it).
+Describes controls implemented through Phase 4, and flags what is explicitly deferred (with the phase that will add it).
 
 ## Authentication
 
@@ -37,7 +37,21 @@ Describes controls implemented through Phase 3, and flags what is explicitly def
 ## Rate limiting
 
 - **Auth endpoints (login, registration): still not rate-limited.** A real gap, flagged as a blocker before any public launch.
-- **Public voice endpoints (Phase 3):** an in-memory per-process limiter (`src/server/voice/rateLimit.ts`) caps embed session preparation at 10/min per IP + agent **and** 30/min per agent regardless of IP, knowledge searches at 20/min per conversation, and lead submissions at 5/min per conversation. Because provider tokens are single-use per conversation, the per-agent preparation ceiling also bounds token mints, and it holds even if `X-Forwarded-For` is spoofed (Vercel overwrites that header; other hosts may not). The limiter resets on restart and isn't shared across instances, so it must be replaced with a durable one before production; per-organization quotas (Phase 4) are the real cost control.
+- **Public voice endpoints (Phase 3):** an in-memory per-process limiter (`src/server/voice/rateLimit.ts`) caps embed session preparation at 10/min per IP + agent **and** 30/min per agent regardless of IP, knowledge searches at 20/min per conversation, and lead submissions at 5/min per conversation. Because provider tokens are single-use per conversation, the per-agent preparation ceiling also bounds token mints, and it holds even if `X-Forwarded-For` is spoofed (Vercel overwrites that header; other hosts may not). The limiter resets on restart and isn't shared across instances, so it must be replaced with a durable one before production. Per-organization quotas (Phase 4, below) are the real cost control.
+
+## Billing, quotas and payments (Phase 4)
+
+- **Server-side entitlements.** Every voice session needs allowance to start. Preparing one takes a per-organization Postgres advisory lock, then checks the plan, the simultaneous-session limit and remaining minutes, and reserves at most 15 minutes. Concurrent requests can't race past a limit (tested with parallel requests). `createAgent` checks the agent limit under the same lock. Public visitors only ever see a generic "unavailable" message, never plan state.
+- **Bounded spend.** The overage charge can never exceed the owner's approved budget (default 0 = hard stop). The residual risk — a tampered client talking past its cut-off — falls on the platform, not the customer; see `docs/KNOWN_LIMITATIONS.md`.
+- **Idempotent metering.** One ledger row per session (unique key), written only by whoever wins an atomic ACTIVE → COMPLETED claim. Client-reported durations are never billed.
+- **Webhook authentication.** `/api/webhooks/paystack` is public but acts only on bodies whose `X-Paystack-Signature` (HMAC-SHA512 of the raw body, secret key) matches, compared in constant time. With no secret configured it answers 503 and stores nothing. Bodies over 256 KB are refused.
+- **Webhook integrity.** Identical redeliveries are skipped (SHA-256 body key), and each event's effects commit atomically with its record. `charge.success` is re-verified with Paystack's API before anything is granted, and the amount, currency and plan must match our own records, otherwise the payment is `REJECTED` and audit-logged. Tenants are mapped only through references and codes we created, never through payload metadata.
+- **Checkout integrity.** The client names a plan code; the server picks the amount, currency, plan and reference. Customers are only ever redirected to HTTPS `paystack.com` hosts.
+- **Data minimisation.** Webhook records keep a summary (references, codes, outcome) — never card details or authorization codes. The Paystack `email_token` is stored because cancellation requires it; it isn't a payment credential.
+- **Roles.** Checkout and payment confirmation: OWNER/ADMIN. Cancellation and overage budget: OWNER. All billing changes are audit-logged.
+- **Platform admin.** `User.isPlatformAdmin` is checked against the database on every request (not the session token), has no grant UI, and non-admins get a 404 for `/admin/*`. Plan edits, cost rates and manual assignments are audit-logged; trial plans can't be made public or linked to Paystack; manual assignment is refused while a Paystack subscription is renewing.
+- **Cron.** `/api/cron/sweep-sessions` requires `Authorization: Bearer $CRON_SECRET` (constant-time compare); it answers 503 when unset.
+- **Database guards.** CHECK constraints keep usage quantities, budgets, reservations and plan limits non-negative.
 
 ## Transport / storage encryption
 

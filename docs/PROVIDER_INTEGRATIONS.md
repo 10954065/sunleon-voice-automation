@@ -4,7 +4,9 @@
 
 **Phase 1 had zero external provider dependencies by design.** Phase 2 added an embeddings provider behind an adapter. Phase 3 adds real-time voice through the **same** provider (Vercel AI Gateway) and the same key. No live credential is configured in this environment, so both are implemented and tested up to the provider boundary, and the live calls are BLOCKED.
 
-Everything below Phase 3 is still an **evaluation plan** for later phases, not a claim that those integrations exist or that pricing/capabilities have been verified against current provider documentation. Each will be re-verified against official docs immediately before it is implemented, per Part D: "Use official, current provider documentation... Never invent APIs or assume an account has access to a feature."
+Phase 4 adds payments through **Paystack**, likewise implemented and tested up to the provider boundary, with live payments BLOCKED on credentials.
+
+Everything after Phase 4 is still an **evaluation plan** for later phases, not a claim that those integrations exist or that pricing/capabilities have been verified against current provider documentation. Each will be re-verified against official docs immediately before it is implemented, per Part D: "Use official, current provider documentation... Never invent APIs or assume an account has access to a feature."
 
 ## Phase 2 — Knowledge ingestion & retrieval (implemented)
 
@@ -34,12 +36,23 @@ What is verified vs. not, precisely:
 
 Important constraint found while building: the Gateway realtime model **ignores `sessionConfig` passed at mint time** (comment and code in `@ai-sdk/gateway`'s `GatewayRealtimeModel.doCreateClientSecret`). Instructions, voice and tools are applied by the browser's `session-update` event, so business instructions necessarily pass through the caller's browser. See `docs/SECURITY_MODEL.md` and `docs/DECISIONS.md`.
 
-## Phase 4 — Billing
+## Phase 4 — Billing (implemented; live payments BLOCKED on credentials)
 
-| Need | Candidates to evaluate | Notes |
-|---|---|---|
-| Payments (Ghana-first) | Paystack | Named explicitly in the brief; must confirm current webhook signature scheme and supported payment methods for GHS before integrating |
-| Payments (international, later) | Stripe | Only if/when international billing is prioritized |
+**Provider:** Paystack, behind the `PaymentProvider` interface in `src/server/billing/paystack.ts` (checkout, verify transaction, disable subscription). Stripe remains a later option for international billing.
+
+**Verified against Paystack's own published sources on 2026-10-22** (paystack.com blocks automated fetches, so the checks used Paystack's documentation repository and their official Magento plugin on GitHub):
+- Webhooks carry `X-Paystack-Signature`: HMAC-SHA512 of the raw request body, keyed with the **secret key** (there is no separate webhook secret). The official plugin compares it in constant time and then re-verifies the transaction with the API — we do both.
+- A subscription starts by initializing a transaction with a `plan` code; Paystack then sends `charge.success` and `subscription.create` (carrying `subscription_code`, `email_token`, `next_payment_date`).
+- Subscriptions are cancelled with `POST /subscription/disable { code, token }`, where `token` is the `email_token`.
+- Failed subscription charges are **not retried** by Paystack.
+- The documentation repository is dated 2018. Field names (`charge.success`, `invoice.payment_failed`, `subscription.not_renew`, `subscription.disable`) match the current plugin, but every payload must be re-confirmed in a live test-mode session.
+
+**Not verified (BLOCKED on `PAYSTACK_SECRET_KEY`):** a real checkout, real webhook deliveries, renewal and cancellation on a live account, and which GHS payment methods (card, mobile money) subscriptions support. Run the checklist in `docs/PHASE_STATUS.md`.
+
+**Setup once credentials exist:**
+1. Set `PAYSTACK_SECRET_KEY` (test key first).
+2. In the Paystack dashboard, create monthly GHS plans with the same amounts as Starter and Growth; paste each `PLN_` code into the plan in `/admin/billing`. A plan without a code can't be bought online.
+3. Set the webhook URL to `https://<your-host>/api/webhooks/paystack`. Paystack's documented sending IPs can additionally be allow-listed at the edge; the signature check doesn't depend on it.
 
 ## Phase 6 — Telephony
 
@@ -60,7 +73,7 @@ Important constraint found while building: the Gateway realtime model **ignores 
 
 - **Phases 2 and 3 (now):** `AI_GATEWAY_API_KEY` — one key unblocks both real embeddings and real voice sessions. It must have access to `openai/gpt-realtime-2` on the Gateway (check the Gateway model list for your team). Allowed embed domains are configured per agent in Agent Studio, not via env vars.
 - **Before production (any phase):** a managed Postgres provider with pgvector support, an S3-compatible object storage provider (to replace the local-disk adapter), and a linked Vercel project.
-- **Phase 4:** Paystack account + API keys, webhook signing secret.
+- **Phase 4:** Paystack account and secret key (`PAYSTACK_SECRET_KEY`, which also verifies webhooks), GHS plans created in the Paystack dashboard, the webhook URL set; plus `CRON_SECRET` for the session sweeper. Until then, platform admins assign plans manually.
 - **Phase 6:** telephony provider account + API keys, phone number provisioning.
 
 None of these blocked Phase 1 or the non-embedding parts of Phase 2.

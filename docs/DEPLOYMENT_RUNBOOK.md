@@ -52,6 +52,19 @@ See `.env.example` for the authoritative list.
 | `AUTH_SECRET` | Auth.js session encryption secret (generate with `npx auth secret`) | Phase 1 |
 | `NEXTAUTH_URL` | Base URL of the app (e.g. `http://localhost:3000` locally) | Phase 1 |
 | `AI_GATEWAY_API_KEY` | Vercel AI Gateway key, server-side only. Phase 2: knowledge-base embeddings. Phase 3: minting single-use realtime voice tokens for `openai/gpt-realtime-2` (the key's team must have access to that model). Without it, knowledge sources fail at the embedding step and voice sessions refuse to start, both with a clear error — see `docs/KNOWN_LIMITATIONS.md`. | Phase 2 (voice: Phase 3) |
+| `PAYSTACK_SECRET_KEY` | Paystack secret key, server-side only. Starts checkouts, verifies transactions, cancels subscriptions, and verifies webhook signatures. Optional: without it, online payment and the webhook are BLOCKED (503) and plans are assigned manually in `/admin/billing`. | Phase 4 |
+| `CRON_SECRET` | Bearer secret for `/api/cron/sweep-sessions` (Vercel Cron sends it automatically when set in the project). Without it the route answers 503; sessions are still swept per organization. | Phase 4 |
+
+## Platform admin and billing setup (Phase 4)
+
+1. **Grant platform admin** to an operator who has already signed up. There is deliberately no UI for this:
+   ```sql
+   UPDATE "User" SET "isPlatformAdmin" = true WHERE email = 'operator@example.com';
+   ```
+   (Locally: `docker compose exec -T postgres psql -U sunleon -d sunleon_voice -c "<the statement>"`.) Revoke by setting it to `false`; it takes effect on the next request.
+2. In `/admin/billing`, review the seeded plans (Trial, Starter, Growth — illustrative values) and enter a **voice cost rate** once real Gateway charges are known.
+3. **Paystack** (when the account exists): set `PAYSTACK_SECRET_KEY`; create matching monthly GHS plans in the Paystack dashboard and paste each `PLN_` code into the plan; set the webhook URL to `https://<host>/api/webhooks/paystack`; then run the Paystack checklist in `docs/PHASE_STATUS.md`.
+4. **Cron:** `vercel.json` schedules `/api/cron/sweep-sessions` daily at 03:00 UTC (the Hobby plan allows at most daily). Set `CRON_SECRET` in the Vercel project.
 
 ## Production deployment (planned, not yet done)
 

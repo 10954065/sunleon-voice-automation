@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { requireOrgContext } from "@/server/auth/session";
 import { TenantAccessError } from "@/server/auth/tenant";
 import { signOut } from "@/server/auth/config";
+import { isPlatformAdmin } from "@/server/auth/platform-admin";
 
 // Tenant-scoped shell: resolves the session and membership on every request.
 export const instant = false;
@@ -12,6 +13,7 @@ const NAV_ITEMS = [
   { href: "", label: "Overview" },
   { href: "/agents", label: "Agents" },
   { href: "/members", label: "Members" },
+  { href: "/billing", label: "Billing" },
 ];
 
 export default async function OrgDashboardLayout({
@@ -32,6 +34,7 @@ export default async function OrgDashboardLayout({
     }
     throw error;
   }
+  const showPlatformAdmin = await isPlatformAdmin(context.user.id);
 
   return (
     <div className="flex flex-1">
@@ -48,6 +51,14 @@ export default async function OrgDashboardLayout({
               {item.label}
             </Link>
           ))}
+          {showPlatformAdmin ? (
+            <Link
+              href="/admin/billing"
+              className="block rounded-md px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50"
+            >
+              Platform admin
+            </Link>
+          ) : null}
         </nav>
         <form
           action={async () => {

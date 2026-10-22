@@ -119,3 +119,35 @@ Append-only log of significant decisions. Each entry: date, decision, context, a
 **Context:** After applying, bare `prisma migrate dev` re-diffs, sees the pgvector index "drift" again, and asks for a new migration name. In a non-interactive shell that prompt never returns, and the orphaned processes held Postgres's migration advisory lock until they were found and stopped.
 
 **Rule:** Generate with `npx prisma migrate dev --create-only --name <name>`, inspect and strip any `DROP INDEX "KnowledgeChunk_embedding_cosine_idx"`, then apply with `npx prisma migrate deploy`.
+
+## 2026-10-22 — Reserve voice time when a session is prepared, under a per-organization lock
+
+**Context:** The server can't terminate a provider session it doesn't relay, so the only point where it can refuse cost is before the session starts. Checking "minutes used < allowance" isn't enough: parallel requests would all see the same free allowance.
+
+**Decision:** Session preparation runs `reserveVoiceSeconds` in the same transaction that creates the conversation, under `pg_advisory_xact_lock(namespace, hashtext(organizationId))`. It reserves min(15 min, remaining allowance) on the conversation, and the widget ends the call there. Live reservations count against both the allowance and the simultaneous-session limit until the session settles or is swept.
+
+**Alternatives considered:** Redis counters (another dependency, and still racy without Lua); `SERIALIZABLE` transactions (retries surface as errors under contention). The advisory lock is held for milliseconds and needs nothing new.
+
+## 2026-10-22 — The ledger, not usage events, is the billable record
+
+**Decision:** `UsageLedgerEntry` holds one row per session with a unique `voice-session:<id>` key, written only by whoever wins the atomic ACTIVE → COMPLETED claim. Quantity is our server's clock from token issue to end. Client-reported durations are kept on the `SESSION_ENDED` event for comparison and never billed. Each row snapshots the estimated cost at the rate in force, so later rate changes don't rewrite history.
+
+## 2026-10-22 — Abandoned sessions are charged their full reservation
+
+**Context:** When a tab dies and its end beacon is lost, the real session length is unknown.
+
+**Decision:** The sweeper (run by the organization's next session preparation, and daily by cron) closes such sessions and charges the full reservation (≤ 15 min). It errs toward the customer paying for time they may not have used, rather than unbounded unbilled provider cost. A session that never got a token is closed without charge. Documented in `docs/KNOWN_LIMITATIONS.md`.
+
+## 2026-10-22 — Billing periods: monthly windows from an anchor, entitlement by paid-through date
+
+**Context:** The first design stored the current period's start and end on the subscription. A renewal paid a few hours before the period ended would have moved the start into the future, briefly making a paid-up subscription look unentitled and counting usage against the wrong period.
+
+**Decision:** A subscription stores `billingAnchorAt` and `paidThroughAt`. Periods are calendar months counted from the anchor (UTC, clamped to month ends). Entitlements apply only while now < `paidThroughAt`, whatever the status, so a missed renewal lapses with no webhook needed. On-time renewals extend `paidThroughAt` on the same anchor; late ones re-anchor at the payment. The trial applies only to organizations that have never had a subscription.
+
+## 2026-10-22 — Paystack: tenant mapping only through our own records, with server-side re-verification
+
+**Decision:** Checkouts use our own `slv_<uuid>` reference and our `Plan` row's amount and plan code. Webhooks are authenticated by signature, deduplicated by body hash, and each `charge.success` is re-verified with Paystack's API. Amount, currency and plan must match our records, otherwise the payment is `REJECTED`. Renewals are mapped through the customer and plan codes stored on a subscription that one of our checkouts created. Payload metadata is never trusted for tenancy. Out-of-order events (e.g. `subscription.create` before its `charge.success`) answer 503 so Paystack redelivers. Plan changes are cancel-then-subscribe (no proration) to keep billing simple and auditable for the pilot.
+
+## 2026-10-22 — Platform admin is a database flag with no grant UI
+
+**Decision:** Cross-tenant access is `User.isPlatformAdmin`, read from the database on every request (not from the session token, so revocation is immediate), and granted only by SQL. The existing `SUPER_ADMIN` role is a per-organization membership rank and doesn't confer cross-tenant access. Non-admins get a 404 for `/admin/*`, so the console's existence isn't revealed.

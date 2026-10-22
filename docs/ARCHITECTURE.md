@@ -2,7 +2,7 @@
 
 ## Status
 
-This reflects the architecture as implemented through **Phase 3**. Components marked "(planned)" do not exist yet.
+This reflects the architecture as implemented through **Phase 4**. Components marked "(planned)" do not exist yet.
 
 ## High-level shape
 
@@ -57,13 +57,15 @@ useRealtime ═══════════ WebSocket (ai-gateway-auth.<token>
 
 The dashboard "Test voice" panel uses the same widget, with step 1 replaced by an authenticated, role-checked route that tests the latest draft.
 
-Still planned, not yet built: background job runner (stale-session sweeper, async ingestion), Redis (durable rate limiting), S3-compatible storage, payment provider adapter (Phase 4), telephony adapters (Phase 6), and a server-side voice relay if instruction confidentiality or server-enforced session caps become requirements.
+**Billing (Phase 4)** wraps that flow. When a session is prepared, `reserveVoiceSeconds` (in `src/server/billing/quota.ts`) runs inside the transaction that creates the conversation. Under a per-organization advisory lock it sweeps abandoned sessions, resolves entitlements (subscription within its paid-through date → the trial → none), and checks the simultaneous-session limit and remaining minutes. It stores the reservation on the conversation, and that becomes the widget's cut-off. Ending a session (or the sweeper) settles it once into `UsageLedgerEntry` and raises at most one warning and one exhausted alert per period. Payments go through the Paystack adapter: checkout (server action) → Paystack → return page verification and/or a signed webhook → `applySuccessfulCharge` → `Subscription`. Platform admins manage plans, cost rates and manual assignments in `/admin/billing`. The cron route `/api/cron/sweep-sessions` is a daily backstop for the sweeper.
+
+Still planned, not yet built: a background job runner (async ingestion), Redis (durable rate limiting), S3-compatible storage, email notifications (usage alerts are in-app only), telephony adapters (Phase 6), and a server-side voice relay if instruction confidentiality or server-enforced session caps become requirements.
 
 ## Why Next.js App Router
 
 Chosen because (a) the spec prefers it, (b) the target deploy platform is Vercel (Next.js-native), (c) Server Components let tenant-scoped data fetching happen server-side by default, reducing the chance of leaking cross-tenant data to the client. See `docs/DECISIONS.md`.
 
-## Directory layout (Phase 3)
+## Directory layout (Phase 4)
 
 ```
 src/
@@ -72,9 +74,13 @@ src/
     (auth)/                # sign-in, sign-up
     dashboard/[orgSlug]/   # protected, tenant-scoped app shell
       agents/              # Agent Studio, knowledge base, voice test/embed/activity UI
+      billing/             # plan, usage, overage budget, checkout, cancel, history (Phase 4)
+    admin/billing/         # platform-admin console: plans, cost rate, margin report (Phase 4)
     widget/[agentId]/      # public iframe page for embedded voice (Phase 3)
     api/auth/[...nextauth]/ # Auth.js route handler
     api/voice/             # session prepare/token/end, search-knowledge tool, leads (Phase 3)
+    api/webhooks/paystack/ # signed Paystack webhook receiver (Phase 4)
+    api/cron/sweep-sessions/ # CRON_SECRET-protected abandoned-session sweeper (Phase 4)
   server/
     auth/
       config.ts            # Auth.js (NextAuth) setup
@@ -84,6 +90,7 @@ src/
     actions/                # Server Actions (register, org, membership, agent, knowledge)
     knowledge/              # Phase 2 pipeline: chunk, extract, ssrf, embeddings, storage, retrieval, pipeline
     voice/                  # Phase 3: provider, session lifecycle, instructions, embed tickets, domains, rate limit
+    billing/                # Phase 4: entitlements, quota, usage ledger, sweeper, paystack, charges, webhooks, report
     db/                    # Prisma client singleton
   lib/                     # shared utilities (validation schemas, etc.)
   components/              # UI components (shadcn/ui-based) and voice-widget/ (Phase 3)

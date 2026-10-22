@@ -1,6 +1,6 @@
 # Phase Status — Sunleon Voice
 
-Last updated: 2026-10-22 (Phase 3 implementation).
+Last updated: 2026-10-22 (Phase 4 implementation).
 
 | Phase | Status |
 |---|---|
@@ -8,7 +8,7 @@ Last updated: 2026-10-22 (Phase 3 implementation).
 | 1 — Foundation and authentication | VERIFIED |
 | 2 — Agent Studio and knowledge ingestion | VERIFIED (embeddings credential-blocked — see below) |
 | 3 — Real-time AI voice MVP | BLOCKED — built and tested up to the provider; live conversation needs `AI_GATEWAY_API_KEY` (see below) |
-| 4 — Usage, plans, and billing | NOT STARTED |
+| 4 — Usage, plans, and billing | BLOCKED — metering, plans, limits and the admin console built and verified; live Paystack payments need `PAYSTACK_SECRET_KEY` (see below) |
 | 5 — Analytics and operational controls | NOT STARTED |
 | 6 — Telephony | NOT STARTED |
 | 7 — Advanced voice and integrations | NOT STARTED |
@@ -228,6 +228,88 @@ See `docs/KNOWN_LIMITATIONS.md` → "Phase 3 — real-time voice". The most impo
 2. Apply migrations with `npx prisma migrate deploy` (never answer `migrate dev`'s prompt — see `docs/DECISIONS.md`).
 3. Note that `npm run test` wipes the local dev database.
 
-### Phase 4 acceptance criteria (for reference, not yet attempted)
+## Phase 4 — Usage, plans, and billing: BLOCKED (live payments need `PAYSTACK_SECRET_KEY`)
 
-Usage is correctly attributed, duplicate events cannot double-count, entitlements are enforced, and usage exhaustion cannot create uncontrolled bills.
+Metering, plans, entitlements, limits, warnings, cost estimates and the admin console are built, tested against real Postgres, and checked in a real browser. The Paystack integration is built to Paystack's published API and webhook scheme and tested with a test double at the provider boundary. **No real Paystack payment has been made**, because no Paystack account is configured. Per the brief, that is reported as a blocker, not as success.
+
+### What was built
+
+- **Plans** (`Plan`): configurable price (GHS minor units), included minutes, simultaneous-session limit, agent limit, optional overage rate, warning threshold, trial window, self-serve vs private, Paystack plan link. Seeded by migration with the brief's illustrative Trial (free, 10 min, 14 days), Starter (GHS 299, 150 min) and Growth (GHS 799, 500 min). Overage is off on every plan until real costs are measured.
+- **Entitlements** (`src/server/billing/entitlements.ts`): a subscription grants its plan only while now is before its paid-through date, whatever its status, so a missed renewal lapses on its own. New organizations get the trial once; a lapsed paid plan never falls back to it. With no plan, voice and new agents are blocked.
+- **Usage ledger** (`UsageLedgerEntry`): one row per session, `quantity` = seconds measured by our server from token issue to end (client-reported time is kept only as a labelled comparison), attributed to organization, agent, conversation, provider and model, with a cost-estimate snapshot. A unique idempotency key per session plus an atomic ACTIVE → COMPLETED claim mean retried ends, beacons and sweeps can never count a session twice.
+- **Limits, enforced server-side** (`src/server/billing/quota.ts`): when a session is prepared, a per-organization Postgres advisory lock serialises the check. It sweeps abandoned sessions, then checks the plan, the simultaneous-session limit and the remaining allowance (included minutes + the overage the owner pre-approved − used − time held by live sessions). It reserves at most 15 minutes, and the reservation becomes the widget's cut-off. Public visitors see a generic message; dashboard users see why.
+- **Overage budget**: owner-set monthly cap. Overage time = budget ÷ the plan's overage rate; usage can never run past it. 0 (the default) means a hard stop at the included minutes.
+- **Abandoned sessions**: closed by the organization's next session preparation and by a protected cron route (`/api/cron/sweep-sessions`, `CRON_SECRET`, daily via `vercel.json`). A session that got a token but never reported its end is charged its full reservation — a conservative estimate, documented.
+- **Warnings**: one alert per period at the warning threshold (80% by default) and one when the included minutes are used up (`UsageAlert`, unique per period). Shown on the Overview and Billing pages. Not emailed — no email provider yet.
+- **Agent limit**: `createAgent` counts active agents under the same lock.
+- **Paystack adapter** (`src/server/billing/paystack.ts`, `charges.ts`, `webhooks.ts`): checkout via Initialize Transaction with a plan code (amount, currency and plan from our `Plan` row; our own `slv_<uuid>` reference). The webhook verifies `X-Paystack-Signature` (HMAC-SHA512 of the raw body, timing-safe) and deduplicates on SHA-256 of the body. It re-verifies every `charge.success` with Paystack's API, checks amount, currency and plan, and maps tenants only through records we created. It handles `subscription.create` (out-of-order arrival answers 503 so Paystack retries), on-time and late renewals, `invoice.payment_failed` (past due; access runs to the paid-through date), `subscription.not_renew` and `subscription.disable`. The return page verifies the payment directly, through the same idempotent path. Owners cancel through Paystack's disable endpoint; access runs to the end of the paid month.
+- **Billing page** (`/dashboard/[orgSlug]/billing`): current plan and status, usage this period with a progress bar, live sessions, remaining time, overage charge (capped at the budget), overage budget form, plans, cancel, billing history.
+- **Platform admin console** (`/admin/billing`): edit and create plans, set the voice cost rate (GHS per minute, with a required source note), a per-organization current-period report (minutes, estimated cost, revenue, margin; "unknown" margin when usage is unpriced), manual plan assignment (enterprise, pilots, or while Paystack is blocked), recent webhook events and rejected payments. Access is a `User.isPlatformAdmin` flag checked against the database on every request, with no UI to grant it; non-admins get a 404.
+- **Fixes found along the way**: CI had never passed — it used a Postgres image without pgvector, and typecheck needed Next.js's generated route types (`npm run typecheck` now runs `next typegen` first). The Paystack response schema wrongly required a `data` field, which would have reported every successful cancellation as a failure (caught by tests).
+
+### Acceptance criteria (from the master build prompt) — status
+
+| Criterion | Status |
+|---|---|
+| Usage is correctly attributed | **Met** — every ledger row carries organization, agent, conversation, provider and model from the conversation row; tenant isolation of summaries tested. |
+| Duplicate events cannot double-count | **Met** — unique ledger key per session plus an atomic claim (5 concurrent ends → 1 row); webhook bodies deduplicated by hash, charges by reference (4 concurrent deliveries → processed once); all tested. |
+| Entitlements are enforced | **Met** — plan, simultaneous sessions, minutes and agent count are checked server-side under a lock; 6 parallel prepares against a limit of 2 → exactly 2 succeed; tested. |
+| Usage exhaustion cannot create uncontrolled bills | **Met, with one documented gap** — no session starts without allowance; each is capped at its reservation; the overage charge is capped at the owner's budget. The gap: the provider session runs in the visitor's browser, so a tampered client could keep talking past its cut-off at our cost, not the customer's (KNOWN_LIMITATIONS). |
+| Payment integration with verified webhooks | **BLOCKED** — built and tested with signed payloads and a test double; no live Paystack account. |
+
+### Quality gates — actual results
+
+- `npm run typecheck` (now `next typegen && tsc --noEmit`): clean.
+- `npm run lint`: 0 errors, 1 warning (the generated `coverage/` folder, as before).
+- `npm run test:coverage`: **246 tests in 31 files, all passing.** Statements **83.89%** (above the 80% target for the first time); `src/server/billing` ~89%.
+- `npm run build`: succeeds; `/dashboard/[orgSlug]/billing`, `/admin/billing`, `/api/webhooks/paystack` and `/api/cron/sweep-sessions` present.
+- Migrations: `20261022131745_phase4_billing` (spurious `DROP INDEX` removed; adds CHECK constraints so usage, budgets and limits can't go negative; seeds the three plans) and `20261022140000_phase4_subscription_billing_anchor` (hand-written column renames). Applied with `migrate deploy`; `migrate diff` shows only the known pgvector-index false positive.
+- CI on GitHub: first green run 39783255519 (just before Phase 4). Check the Actions tab for the Phase 4 commit's run.
+
+### Manual verification (real browser, via Playwright, no Paystack key)
+
+- New workspace → Overview shows "Trial — 0 min of 10 min"; Billing shows the trial end date, the period, a usage bar, and "Online payment isn't switched on yet (Paystack isn't configured)" with no buy buttons.
+- Owner saved an overage budget of GHS 25 → "Overage budget saved.", stored as 2500 pesewas and audit-logged. (This found a display bug — the field showed the trial's effective 0 — now fixed.)
+- `/admin/billing` as a non-admin owner → 404; signed out → redirect to sign-in; after the documented SQL grant → the console loads with plans, report and events.
+- Admin assigned Growth for 2 months → "Kofi Bakery is on Growth for 2 month(s)."; the organization's billing page shows "Growth — Active until 22 Dec 2026", the period 22 Oct – 22 Nov, and a Cancel button for the owner.
+- Over HTTP: `POST /api/webhooks/paystack` → 503 `not_configured`, nothing stored; `GET /api/cron/sweep-sessions` without `CRON_SECRET` → 503.
+
+### Paystack checklist — run once `PAYSTACK_SECRET_KEY` (test mode) is set
+
+1. In the Paystack dashboard create monthly GHS plans matching Starter and Growth; paste their `PLN_` codes in `/admin/billing`.
+2. Set the webhook URL to `https://<host>/api/webhooks/paystack` (use a tunnel for local testing).
+3. As an owner, choose Starter → Paystack test checkout → the return page says "Payment confirmed"; the plan shows Starter and history shows the payment.
+4. In `/admin/billing` → Recent events: `charge.success` and `subscription.create` processed; the subscription now has its codes.
+5. Cancel → Paystack shows the subscription disabled; Billing shows "Cancelled — active until …".
+6. Resend an event from the Paystack dashboard → recorded once (duplicate).
+7. Confirm Paystack's current payment methods for GHS (card, mobile money) and record them.
+
+### Security controls implemented (new this phase)
+
+Webhook HMAC-SHA512 verification over the raw body with constant-time comparison; no action without a configured secret; body-hash idempotency; server-side re-verification of charges; amount/currency/plan matching; tenant mapping only through our own references and stored codes; checkout amounts chosen by the server; redirects only to HTTPS `paystack.com` hosts; minimal webhook summaries (no card or authorization data); OWNER/ADMIN for checkout, OWNER for cancel and budget; a database-checked platform-admin flag with no grant UI; all billing and admin changes audit-logged; quota checks serialised by an advisory lock; database CHECK constraints on usage and money columns; a secret-protected cron route. Full detail in `docs/SECURITY_MODEL.md`.
+
+### Required environment variables
+
+- `PAYSTACK_SECRET_KEY` — new, optional; without it checkout and webhooks are BLOCKED (manual plan assignment still works).
+- `CRON_SECRET` — new; required for the cron sweep route (sessions are still swept per organization without it).
+
+### External accounts/credentials still needed
+
+- Paystack account (test, then live keys) with GHS plans and the webhook URL configured.
+- `AI_GATEWAY_API_KEY` (Phases 2–3) — still needed for live voice and embeddings.
+- Measured provider costs, to set a real voice cost rate (margins show "unknown" until then).
+
+### Known limitations / blockers
+
+See `docs/KNOWN_LIMITATIONS.md` → "Phase 4 — billing". The most important: no live Paystack payment yet; overage is computed and capped but invoiced manually; plan changes need cancel-then-subscribe (no proration); usage alerts are in-app only; the cost rate is an admin-entered estimate.
+
+### Manual steps for the developer
+
+1. `npx prisma migrate deploy`.
+2. Grant yourself platform admin: `UPDATE "User" SET "isPlatformAdmin" = true WHERE email = '<you>';` (see `docs/DEPLOYMENT_RUNBOOK.md`).
+3. Set `CRON_SECRET`; set `PAYSTACK_SECRET_KEY` and run the Paystack checklist above.
+4. Enter a voice cost rate in `/admin/billing` once real provider charges are known.
+
+### Phase 5 acceptance criteria (for reference, not yet attempted)
+
+Analytics reflect real events, access is authorized, and retention and deletion behavior is tested.

@@ -20,6 +20,9 @@ model User {
   email         String       @unique
   passwordHash  String?
   name          String?
+  // Platform operator flag (cross-tenant admin console). Never settable from the app UI;
+  // granted with a direct SQL update — see docs/DEPLOYMENT_RUNBOOK.md.
+  isPlatformAdmin Boolean    @default(false)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
@@ -33,6 +36,9 @@ model Organization {
   id          String       @id @default(cuid())
   name        String
   slug        String       @unique
+  // Most the owner allows in overage charges per billing period, in minor units (pesewas).
+  // 0 = hard stop at the plan's included minutes.
+  overageBudgetMinor Int   @default(0)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
@@ -42,6 +48,10 @@ model Organization {
   knowledgeSources KnowledgeSource[]
   conversations    Conversation[]
   leads            Lead[]
+  subscription     Subscription?
+  usageLedger      UsageLedgerEntry[]
+  usageAlerts      UsageAlert[]
+  billingTransactions BillingTransaction[]
 }
 
 model Agent {
@@ -107,6 +117,9 @@ model Conversation {
   originDomain   String?
   startedAt      DateTime            @default(now())
   tokenIssuedAt  DateTime?
+  // Voice seconds held against the organization's allowance when the session was prepared.
+  // Also the session's maximum length, which the widget enforces.
+  reservedSeconds Int        @default(0)
   endedAt        DateTime?
   closeReason    String?
   errorMessage   String?
@@ -141,6 +154,195 @@ model UsageEvent {
 
   @@index([organizationId, createdAt])
   @@index([conversationId])
+}
+
+// --- Phase 4: plans, usage ledger, billing ---
+
+model Plan {
+  id                        String   @id @default(cuid())
+  code                      String   @unique
+  name                      String
+  // Minor units (pesewas for GHS). Illustrative until provider costs are measured.
+  priceMinor                Int
+  currency                  String   @default("GHS")
+  includedMinutes           Int
+  maxConcurrentSessions     Int
+  maxAgents                 Int
+  // Null = overage never allowed on this plan, whatever the organization's budget.
+  overageRateMinorPerMinute Int?
+  warningThresholdPercent   Int      @default(80)
+  // Trial plans apply automatically for trialDays after an organization is created.
+  isTrial                   Boolean  @default(false)
+  trialDays                 Int?
+  // Shown for self-serve purchase. Custom (enterprise) plans are private and assigned by an admin.
+  isPublic                  Boolean  @default(true)
+  active                    Boolean  @default(true)
+  paystackPlanCode          String?  @unique
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  subscriptions             Subscription[]
+  billingTransactions       BillingTransaction[]
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  NON_RENEWING
+  PAST_DUE
+  CANCELED
+}
+
+enum BillingProvider {
+  PAYSTACK
+  MANUAL
+}
+
+model Subscription {
+  id                       String             @id @default(cuid())
+  organizationId           String             @unique
+  planId                   String
+  status                   SubscriptionStatus
+  provider                 BillingProvider
+  // Billing periods are calendar months counted from the anchor. Entitlements apply only while
+  // now < paidThroughAt, whatever the status, so a missed renewal lapses on its own.
+  billingAnchorAt          DateTime
+  paidThroughAt            DateTime
+  providerCustomerCode     String?
+  providerSubscriptionCode String?            @unique
+  // Paystack requires this (with the subscription code) to disable a subscription.
+  // It is not a payment credential.
+  providerEmailToken       String?
+  canceledAt               DateTime?
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+
+  organization             Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan                     Plan               @relation(fields: [planId], references: [id])
+
+  @@index([providerCustomerCode])
+}
+
+enum UsageMetric {
+  VOICE_SECONDS
+}
+
+model UsageLedgerEntry {
+  id                  String       @id @default(cuid())
+  organizationId      String
+  agentId             String?
+  conversationId      String?
+  metric              UsageMetric
+  quantity            Int
+  // Attribution time (the session start), which decides the billing period.
+  occurredAt          DateTime
+  // "server_clock" (measured start to end) or "sweeper_reservation" (abandoned session,
+  // charged its full reservation as a conservative estimate).
+  source              String
+  provider            String?
+  model               String?
+  // Snapshot of the estimated provider cost in micro-units of the plan currency (1e-6 GHS),
+  // using the ProviderCostRate in force when recorded. Null when no rate is configured.
+  estimatedCostMicros Int?
+  // Unique: a retried end request, beacon or sweep can never record the same usage twice.
+  idempotencyKey      String       @unique
+  createdAt           DateTime     @default(now())
+
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, occurredAt])
+}
+
+enum UsageAlertKind {
+  THRESHOLD_WARNING
+  ALLOWANCE_EXHAUSTED
+}
+
+model UsageAlert {
+  id             String         @id @default(cuid())
+  organizationId String
+  kind           UsageAlertKind
+  periodStart    DateTime
+  usedSeconds    Int
+  allowanceSeconds Int
+  createdAt      DateTime       @default(now())
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // One alert of each kind per billing period.
+  @@unique([organizationId, kind, periodStart])
+}
+
+model ProviderCostRate {
+  id              String      @id @default(cuid())
+  metric          UsageMetric
+  provider        String
+  model           String
+  // Estimated provider cost per unit (per voice second) in micro-units of GHS.
+  microsPerUnit   Int
+  // Where the number came from, e.g. "Gateway invoice Oct 2026" — required, so no rate is unexplained.
+  note            String
+  updatedByUserId String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@unique([metric, provider, model])
+}
+
+enum BillingTransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  // Paystack reported success but the amount, currency or plan didn't match ours — not granted.
+  REJECTED
+}
+
+enum BillingTransactionKind {
+  INITIAL
+  RENEWAL
+}
+
+model BillingTransaction {
+  id             String                   @id @default(cuid())
+  organizationId String
+  planId         String?
+  provider       BillingProvider
+  kind           BillingTransactionKind
+  reference      String                   @unique
+  status         BillingTransactionStatus @default(PENDING)
+  amountMinor    Int
+  currency       String
+  customerEmail  String?
+  paidAt         DateTime?
+  failureReason  String?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan           Plan?                    @relation(fields: [planId], references: [id])
+
+  @@index([organizationId, createdAt])
+}
+
+enum WebhookEventStatus {
+  PROCESSED
+  IGNORED
+}
+
+model PaymentWebhookEvent {
+  id             String             @id @default(cuid())
+  provider       BillingProvider
+  // SHA-256 of the raw signed body: an identical redelivery is recognised and skipped.
+  eventKey       String
+  eventType      String
+  status         WebhookEventStatus
+  organizationId String?
+  // A minimal summary (codes, references, amounts) — never card or authorization details.
+  summary        Json?
+  note           String?
+  receivedAt     DateTime           @default(now())
+
+  @@unique([provider, eventKey])
+  @@index([receivedAt])
 }
 
 model Lead {

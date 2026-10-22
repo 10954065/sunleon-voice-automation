@@ -29,6 +29,8 @@ jobs:
       DATABASE_URL: postgresql://sunleon:sunleon_dev_password@localhost:5432/sunleon_voice
       AUTH_SECRET: ci-only-placeholder-secret-not-used-in-production
       NEXTAUTH_URL: http://localhost:3000
+      # Deliberately no PAYSTACK_SECRET_KEY / AI_GATEWAY_API_KEY: CI proves the BLOCKED paths,
+      # and tests that need a key set a fake one at the provider boundary themselves.
 
     steps:
       - uses: actions/checkout@v4

@@ -20,12 +20,18 @@ import {
   type EmbeddingProvider,
 } from "@/server/knowledge/embeddings";
 import { retrieveRelevantChunks } from "@/server/knowledge/retrieval";
+import { QuotaExceededError, reserveVoiceSeconds } from "@/server/billing/quota";
+import { settleConversation } from "@/server/billing/usage";
+import { MAX_SESSION_SECONDS } from "@/lib/voice";
 import type { Experimental_RealtimeToolDefinition as RealtimeToolDefinition } from "ai";
 import type { AgentVersion, ConversationChannel } from "@/generated/prisma/client";
 
 const TOKEN_REQUEST_WINDOW_MS = 2 * 60 * 1000;
 const MAX_LEADS_PER_CONVERSATION = 3;
 const MAX_DASHBOARD_ERROR_CHARS = 300;
+const PUBLIC_UNAVAILABLE_MESSAGE = "This assistant is unavailable right now. Please try again later.";
+// The reservation transaction may queue behind other sessions for the same organization.
+const RESERVATION_TX_OPTIONS = { maxWait: 5_000, timeout: 10_000 };
 
 export class VoiceSessionError extends Error {
   readonly status: number;
@@ -44,6 +50,8 @@ export interface VoiceSessionConfig {
 export interface PreparedVoiceSession {
   conversationId: string;
   sessionConfig: VoiceSessionConfig;
+  /** The seconds reserved against the organization's allowance; the widget ends the call at this point. */
+  maxDurationSeconds: number;
 }
 
 export interface IssuedVoiceToken {
@@ -60,6 +68,7 @@ async function createConversation(params: {
   agentVersion: AgentVersion;
   channel: ConversationChannel;
   originDomain: string | null;
+  now?: Date;
 }): Promise<PreparedVoiceSession> {
   if (!isRealtimeVoiceConfigured()) {
     throw new MissingVoiceCredentialsError();
@@ -84,20 +93,42 @@ async function createConversation(params: {
     turnDetection: { type: "server-vad" },
   };
 
-  // Server-generated (not cuid) because the id doubles as the session's bearer reference
-  // for the tool and lead routes — it must be unguessable.
-  const conversation = await prisma.conversation.create({
-    data: {
-      id: randomUUID(),
-      organizationId: params.organizationId,
-      agentId: params.agentId,
-      agentVersionId: params.agentVersion.id,
-      channel: params.channel,
-      originDomain: params.originDomain,
-    },
-  });
+  const now = params.now ?? new Date();
+  let conversation;
+  try {
+    // Reservation and creation commit together, so the allowance check and the session that
+    // holds it can't be separated by a concurrent request.
+    conversation = await prisma.$transaction(async (tx) => {
+      const reservedSeconds = await reserveVoiceSeconds(tx, params.organizationId, now);
+      // Server-generated (not cuid) because the id doubles as the session's bearer reference
+      // for the tool and lead routes — it must be unguessable.
+      return tx.conversation.create({
+        data: {
+          id: randomUUID(),
+          organizationId: params.organizationId,
+          agentId: params.agentId,
+          agentVersionId: params.agentVersion.id,
+          channel: params.channel,
+          originDomain: params.originDomain,
+          startedAt: now,
+          reservedSeconds,
+        },
+      });
+    }, RESERVATION_TX_OPTIONS);
+  } catch (error) {
+    if (error instanceof QuotaExceededError) {
+      // Dashboard users see why; public visitors never learn about the business's plan.
+      const message = params.channel === "TEST" ? error.message : PUBLIC_UNAVAILABLE_MESSAGE;
+      throw new VoiceSessionError(message, error.status);
+    }
+    throw error;
+  }
 
-  return { conversationId: conversation.id, sessionConfig };
+  return {
+    conversationId: conversation.id,
+    sessionConfig,
+    maxDurationSeconds: conversation.reservedSeconds,
+  };
 }
 
 /** Authenticated path: tests the agent's latest version (draft or published) before publishing. */
@@ -105,6 +136,7 @@ export async function prepareTestVoiceSession(params: {
   organizationId: string;
   organizationName: string;
   agentId: string;
+  now?: Date;
 }): Promise<PreparedVoiceSession> {
   const agent = await prisma.agent.findFirst({
     where: { id: params.agentId, organizationId: params.organizationId, archivedAt: null },
@@ -128,6 +160,7 @@ export async function prepareTestVoiceSession(params: {
     agentVersion: version,
     channel: "TEST",
     originDomain: null,
+    now: params.now,
   });
 }
 
@@ -139,6 +172,7 @@ export async function prepareTestVoiceSession(params: {
 export async function prepareEmbedVoiceSession(params: {
   agentId: string;
   ticket: string;
+  now?: Date;
 }): Promise<PreparedVoiceSession> {
   const verified = verifyEmbedTicket(params.ticket, params.agentId);
   if (!verified) {
@@ -164,6 +198,7 @@ export async function prepareEmbedVoiceSession(params: {
     agentVersion: agent.publishedVersion,
     channel: "EMBED",
     originDomain: verified.host,
+    now: params.now,
   });
 }
 
@@ -238,9 +273,9 @@ export async function issueVoiceToken(params: {
 }
 
 /**
- * Idempotent: unknown or already-ended conversations are a no-op. clientReportedSeconds is
- * stored but labelled as client-reported — it is not trustworthy enough for billing, which
- * Phase 4 must reconcile against the provider's own usage data.
+ * Idempotent: unknown or already-ended conversations are a no-op, and concurrent calls settle
+ * at most once (see settleConversation). Usage is the server's own clock from token issue to
+ * now; clientReportedSeconds is kept only as a labelled comparison and never billed.
  */
 export async function endVoiceSession(params: {
   conversationId: string;
@@ -254,32 +289,25 @@ export async function endVoiceSession(params: {
   }
 
   const now = params.now ?? new Date();
-  const reason = params.reason ?? "client_closed";
   const serverDurationSeconds = conversation.tokenIssuedAt
     ? Math.max(0, Math.round((now.getTime() - conversation.tokenIssuedAt.getTime()) / 1000))
     : 0;
+  // The customer is never billed past the session's reservation (its promised cut-off), even if
+  // the end report arrives late. Anything beyond is platform cost, recorded as measuredSeconds.
+  const billableCap = conversation.reservedSeconds > 0 ? conversation.reservedSeconds : MAX_SESSION_SECONDS;
+  const chargedSeconds = Math.min(serverDurationSeconds, billableCap);
 
-  await prisma.$transaction([
-    prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { status: "COMPLETED", endedAt: now, closeReason: reason },
-    }),
-    prisma.usageEvent.create({
-      data: {
-        organizationId: conversation.organizationId,
-        agentId: conversation.agentId,
-        conversationId: conversation.id,
-        type: "SESSION_ENDED",
-        metadata: {
-          reason,
-          serverDurationSeconds,
-          ...(params.clientReportedSeconds != null && {
-            clientReportedSeconds: params.clientReportedSeconds,
-          }),
-        },
-      },
-    }),
-  ]);
+  await prisma.$transaction((tx) =>
+    settleConversation(tx, {
+      conversation,
+      reason: params.reason ?? "client_closed",
+      chargedSeconds,
+      source: "server_clock",
+      now,
+      ...(chargedSeconds !== serverDurationSeconds && { measuredSeconds: serverDurationSeconds }),
+      clientReportedSeconds: params.clientReportedSeconds,
+    })
+  );
 }
 
 /**

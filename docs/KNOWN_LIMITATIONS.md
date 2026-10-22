@@ -4,7 +4,6 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 
 ## Scope gaps (by design — later phases)
 
-- No billing, plans, usage allowances, budgets, or payment integration (Phase 4). Phase 3 records usage events but nothing enforces limits yet.
 - No conversation analytics dashboard, exports, transcript storage, retention controls, or admin console (Phase 5). Phase 3 shows only the last 10 sessions and 20 leads per agent.
 - No telephony (Phase 6).
 - No custom/cloned voices and no native-language validation (Phase 7).
@@ -14,17 +13,31 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 
 - **No live voice conversation has been tested.** `AI_GATEWAY_API_KEY` is unset in this environment. Dashboard users see "Voice is not configured…" and public visitors see a generic "temporarily unavailable" message — both verified in a real browser. Everything up to the provider boundary is built and tested; the spoken conversation itself is **BLOCKED** until a key is configured, and must then be checked against the list in `docs/PHASE_STATUS.md`.
 - **Business instructions are visible to callers.** The Gateway realtime model ignores session config at token-mint time, so instructions and the knowledge summary are sent by the caller's browser in its `session-update` event. A technical visitor can read them in devtools. The draft form warns businesses about this. Truly private instructions would need a server-side relay (persistent voice worker), which the Gateway model's current connection modes don't support from the AI SDK — revisit in Phase 8 or when moving to a dedicated voice service.
-- **A token holder controls its own session.** The same mechanism means a visitor with a valid session token could send their own `session-update` (different instructions) and use the tenant's provider quota for something else, bounded by the single-use token, the client-side 15-minute cap, and rate limits. Phase 4 quotas and a server-side session duration cap are needed before public launch.
-- **Session duration is capped client-side only (15 minutes).** The server cannot terminate a provider session it doesn't relay.
-- **Usage is not billing-grade.** `SESSION_ENDED` events record our server's wall-clock duration plus a separately labelled client-reported duration. Neither is authoritative; Phase 4 must reconcile against the Gateway's own usage reporting before charging anyone.
-- **Abandoned sessions can stay `ACTIVE`.** If the tab closes and the `pagehide` beacon is lost, the conversation is never ended. A sweeper job (Phase 5 operational controls) should close stale sessions.
+- **A token holder controls its own session.** The same mechanism means a visitor with a valid session token could send their own `session-update` (different instructions) and use the session for something else. Since Phase 4 this is bounded by the organization's plan: every session needs allowance to start, holds a reservation of at most 15 minutes, and counts against the simultaneous-session limit.
+- **Session length is enforced by the widget, not the provider.** The server reserves each session's time (at most 15 minutes, less if the allowance is short) and the widget ends the call there, but the server cannot terminate a provider session it doesn't relay. A tampered client could talk past its cut-off; that time costs the platform, not the customer (billing caps it). A server-side relay would close this — revisit in Phase 8.
+- **Usage is measured by our server's clock, not reconciled with the provider.** The ledger records seconds from token issue to end, capped at the session's reservation (the raw measurement is kept on the `SESSION_ENDED` event as `measuredSeconds` when it differs), or the full reservation for abandoned sessions. It has not been reconciled against the Gateway's own usage reporting, which needs live credentials. A visitor who ends a session early (or a tampered client that reports an early end) is billed for less than the provider may charge.
+- **Abandoned sessions are charged their full reservation.** When the browser never reports an end, the sweeper (per organization on the next session, and the daily cron) closes the session and charges the whole reservation. That is a conservative over-estimate for the customer, by design, because the real length is unknown.
 - **Rate limiting is in-memory and per-process** (`src/server/voice/rateLimit.ts`). It resets on restart and isn't shared across instances, so it is not real protection in a multi-instance deployment. Replace with a durable limiter (e.g. Upstash Redis) before production.
-- **Embed authorization trusts the browser-set `Referer`.** It stops other websites from running the widget in real visitors' browsers, but a non-browser client can forge `Referer` and obtain a ticket. Until Phase 4 quotas exist, direct abuse is bounded only by the per-process rate limits — notably 30 session preparations (and therefore at most 30 provider tokens) per agent per minute.
+- **Embed authorization trusts the browser-set `Referer`.** It stops other websites from running the widget in real visitors' browsers, but a non-browser client can forge `Referer` and obtain a ticket. Abuse is bounded by the per-process rate limits (30 session preparations per agent per minute) and, since Phase 4, by the organization's plan: a forged ticket can still use up a business's minutes, but never more than its plan and approved overage.
 - **No `frame-ancestors` CSP on the widget page yet.** A non-allowed site can still display the iframe; it just shows "not available" and can never start a session. Adding a per-agent `frame-ancestors` header is defense in depth for Phase 8.
 - **Embedding requires an exact hostname.** `example.com` does not cover `www.example.com`; each must be listed. No wildcards, by design.
 - **Voices are OpenAI's built-in set, unverified through the Gateway and unevaluated for Ghanaian English** (pronunciation, names, places, cedi amounts, code-switching). Decision 3 of the brief requires that evaluation before any quality claim.
 - **Caller speech isn't transcribed.** The transcript shows the agent's speech; enabling input transcription needs a provider-specific transcription model to be confirmed in a credentialed session first.
 - **Transcripts are not stored.** They exist only in the caller's browser during the call (the consent notice says so). Storage with retention controls is Phase 5.
+
+## Phase 4 — billing
+
+- **No live Paystack payment has been made.** `PAYSTACK_SECRET_KEY` is unset. Checkout, verification, cancellation and webhook handling are built to Paystack's published API (checked against Paystack's own documentation repository and official plugin) and tested with signed payloads and a test double, but never against a live account. Until then the Billing page says so, the webhook answers 503, and organizations are put on plans manually from `/admin/billing`. Run the checklist in `docs/PHASE_STATUS.md`.
+- **Paystack's GHS payment methods and event payloads are unconfirmed for this account.** Event names and field shapes follow Paystack's docs; mobile-money support for subscriptions in GHS must be confirmed in the Paystack dashboard.
+- **Prices, allowances and limits are illustrative** (the brief's Starter/Growth figures, plus a 10-minute, 14-day trial and session/agent limits we chose). They are configurable in `/admin/billing` and must not be presented as final until provider costs are measured.
+- **No real cost rate is configured.** Cost estimates and margins stay empty ("unknown") until a platform admin enters a rate measured from real Gateway charges. Each ledger row snapshots the rate in force when it was recorded; changing the rate doesn't rewrite history. Rates are in GHS, so a USD-billed provider cost must be converted by whoever enters it.
+- **Overage is capped but invoiced manually.** The overage charge for a period is computed and shown (never above the owner's budget), but Paystack subscriptions charge a fixed plan amount, so overage collection is not automated. Overage is also off on every seeded plan until real costs are known.
+- **No proration or in-place plan change.** To switch plans an owner cancels (access runs to the end of the paid month) and then subscribes to the new plan, which starts a fresh period immediately. Admins can reassign plans manually.
+- **Failed renewals aren't retried by Paystack** (per their docs). The subscription goes `PAST_DUE`, access continues to the paid-through date, then voice stops until the owner pays again (a fresh checkout).
+- **Usage alerts are in-app only** (Overview and Billing banners). No email or SMS — no messaging provider yet.
+- **Concurrency and allowance checks serialise per organization** with a Postgres advisory lock held for a few milliseconds. Fine at pilot scale; very high per-organization session rates would queue.
+- **Platform admin is granted with SQL.** By design there is no UI to make someone a platform admin; see `docs/DEPLOYMENT_RUNBOOK.md`. The admin console covers billing only (Phase 5 adds the rest).
+- **The daily cron is a backstop.** Vercel Hobby crons run at most daily; abandoned sessions in an organization are also swept whenever it next starts a session, so allowance isn't held long in practice.
 
 ## Earlier-phase gaps still open
 
@@ -38,12 +51,14 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 - **`prisma migrate dev` has a known false-positive drift** around the hand-managed pgvector index, and its interactive "name the new migration" prompt blocks in non-interactive shells (it left orphaned processes holding the migration lock during Phase 3). Use `--create-only` to generate and `prisma migrate deploy` to apply — see `docs/DECISIONS.md`.
 - **Integration tests reset the local development database.** They share the `sunleon_voice` database with `npm run dev`, so running the suite wipes any manual test data. A separate test database is a cheap follow-up.
 - **8 npm audit advisories (5 high, 3 moderate)** in dev-only or CLI-only dependency paths (`eslint-config-next` → `braces`; `mammoth` → `argparse` CLI). None is reachable from production code or user input. Phase 3 added `@ai-sdk/gateway` and `@ai-sdk/react` with no new advisories.
-- **Test coverage is 77.9% statements, not the 80% target** (158 tests). The new `src/server/voice` module is at 94%. The remaining gap is the same as before: the Auth.js wrappers (`src/server/auth/config.ts`, `session.ts`, `sign-in.ts`), the real-network branches of the SSRF-safe fetcher, and the PDF/DOCX extraction branches. The coverage scope is `src/server/**`, so route handlers and React components are tested but not counted.
+- **Coverage is 83.9% statements (246 tests), above the 80% target**, but uneven: the Auth.js wrappers (`src/server/auth/config.ts`, `session.ts`, `sign-in.ts`), the real-network branches of the SSRF-safe fetcher and the PDF/DOCX extraction branches remain largely untested. The coverage scope is `src/lib/**` and `src/server/**`, so route handlers and React components are exercised but not counted.
 - **Next.js dev tooling auto-generates `AGENTS.md`.** This is Next.js 16's own file, not an AI-attribution artifact.
 
 ## Things this document explicitly does not claim
 
 - No claim that a live voice conversation works yet.
+- No claim that a live Paystack payment, renewal or cancellation works yet.
+- No claim that the illustrative prices are profitable — margins are unknown until real costs are entered.
 - No claim of Ghanaian-language support (Twi, Ga, Ewe, etc.) or of Ghanaian-English voice quality.
 - No claim of telephony availability in Ghana or anywhere else.
 - No claim of SOC2/ISO or any other certification.

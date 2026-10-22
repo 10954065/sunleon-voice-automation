@@ -345,7 +345,14 @@ describe("voice sessions", () => {
       const conversation = await prisma.conversation.findUniqueOrThrow({ where: { id: conversationId } });
       expect(conversation).toMatchObject({ status: "COMPLETED", closeReason: "user_ended" });
       const ended = await prisma.usageEvent.findFirstOrThrow({ where: { conversationId, type: "SESSION_ENDED" } });
-      expect(ended.metadata).toMatchObject({ serverDurationSeconds: 45, clientReportedSeconds: 42 });
+      expect(ended.metadata).toMatchObject({
+        chargedSeconds: 45,
+        usageSource: "server_clock",
+        clientReportedSeconds: 42,
+      });
+      // The billable quantity is the server's measurement, never the client's report.
+      const ledger = await prisma.usageLedgerEntry.findFirstOrThrow({ where: { conversationId } });
+      expect(ledger).toMatchObject({ quantity: 45, source: "server_clock", metric: "VOICE_SECONDS" });
     });
 
     it("is idempotent and ignores unknown conversations", async () => {

@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import { prisma } from "@/server/db/client";
 import { requireOrgContext } from "@/server/auth/session";
+import { getUsageSummary } from "@/server/billing/usage";
+import { formatMinutes, planLabel } from "@/lib/billing";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
 export const instant = false;
@@ -14,9 +16,10 @@ export default async function OrgOverviewPage({
   const { orgSlug } = await params;
   const context = await requireOrgContext(orgSlug);
 
-  const agentCount = await prisma.agent.count({
-    where: { organizationId: context.organization.id, archivedAt: null },
-  });
+  const [agentCount, usage] = await Promise.all([
+    prisma.agent.count({ where: { organizationId: context.organization.id, archivedAt: null } }),
+    getUsageSummary(context.organization.id),
+  ]);
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -44,12 +47,24 @@ export default async function OrgOverviewPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>No usage yet</CardTitle>
+          <CardTitle>
+            {usage.entitlements.plan
+              ? planLabel(usage.entitlements.plan.name, usage.entitlements.source === "trial")
+              : "No active plan"}
+          </CardTitle>
           <CardDescription>
-            Usage metering and billing land in Phase 4. No estimated costs are shown here until
-            real conversations exist to measure.
+            {usage.entitlements.plan
+              ? `${formatMinutes(usage.usedSeconds)} of ${formatMinutes(usage.entitlements.includedSeconds)} voice minutes used this period.`
+              : "Voice sessions are paused until the organization is on a plan."}
+            {usage.warning === "approaching" ? " You're close to this period's limit." : ""}
+            {usage.warning === "exhausted" ? " This period's included minutes are used up." : ""}
           </CardDescription>
         </CardHeader>
+        <CardContent>
+          <Link href={`/dashboard/${orgSlug}/billing`} className="text-sm font-medium text-amber-700 hover:text-amber-800">
+            Billing & usage →
+          </Link>
+        </CardContent>
       </Card>
     </div>
   );

@@ -1,6 +1,11 @@
 /** Shared between server (src/server/voice/*) and client components — no server-only import here. */
 export const REALTIME_VOICE_MODEL = "openai/gpt-realtime-2";
 
+/** Longest single session. The reservation (and so the widget's cutoff) is never above this. */
+export const MAX_SESSION_SECONDS = 15 * 60;
+/** Below this much remaining allowance a new session isn't worth starting. */
+export const MIN_SESSION_SECONDS = 30;
+
 /**
  * OpenAI's documented built-in realtime voices (developers.openai.com, realtime API reference,
  * checked 2026-10-19). Not yet confirmed end-to-end through the AI Gateway without credentials,

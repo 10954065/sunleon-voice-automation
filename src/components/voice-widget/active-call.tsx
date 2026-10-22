@@ -6,10 +6,7 @@ import { gateway } from "@ai-sdk/gateway";
 import type { UIMessage } from "ai";
 
 import { Button } from "@/components/ui/button";
-import { REALTIME_VOICE_MODEL } from "@/lib/voice";
-
-/** Client-side only — the provider session itself is not server-capped yet (docs/KNOWN_LIMITATIONS.md). */
-const MAX_CALL_MS = 15 * 60 * 1000;
+import { MAX_SESSION_SECONDS, REALTIME_VOICE_MODEL } from "@/lib/voice";
 
 export type VoiceSessionConfig = {
   instructions: string;
@@ -22,6 +19,8 @@ export type CallEndSummary = { reason: string; usageSeconds: number | null };
 type Props = {
   conversationId: string;
   sessionConfig: VoiceSessionConfig;
+  /** From the server's allowance reservation. Enforced here, client-side only — the provider session itself isn't server-capped (docs/KNOWN_LIMITATIONS.md). */
+  maxDurationSeconds: number;
   stream: MediaStream;
   showTranscript: boolean;
   onEnded: (summary: CallEndSummary) => void;
@@ -55,7 +54,15 @@ function messageText(message: UIMessage): string {
     .trim();
 }
 
-export function ActiveCall({ conversationId, sessionConfig, stream, showTranscript, onEnded, onFailed }: Props) {
+export function ActiveCall({
+  conversationId,
+  sessionConfig,
+  maxDurationSeconds,
+  stream,
+  showTranscript,
+  onEnded,
+  onFailed,
+}: Props) {
   const model = useMemo(() => gateway.experimental_realtime(REALTIME_VOICE_MODEL), []);
   const usageSecondsRef = useRef<number | null>(null);
   const endingRef = useRef(false);
@@ -122,9 +129,10 @@ export function ActiveCall({ conversationId, sessionConfig, stream, showTranscri
   });
 
   useEffect(() => {
-    const timer = setTimeout(() => void endCallRef.current("max_duration"), MAX_CALL_MS);
+    const limitMs = Math.min(maxDurationSeconds, MAX_SESSION_SECONDS) * 1000;
+    const timer = setTimeout(() => void endCallRef.current("max_duration"), limitMs);
     return () => clearTimeout(timer);
-  }, []);
+  }, [maxDurationSeconds]);
 
   const label =
     status === "connecting"

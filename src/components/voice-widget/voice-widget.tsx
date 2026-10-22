@@ -3,13 +3,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { MAX_SESSION_SECONDS } from "@/lib/voice";
 import { ActiveCall, type CallEndSummary, type VoiceSessionConfig } from "./active-call";
 import { LeadCaptureForm } from "./lead-capture-form";
 
 type Phase =
   | { kind: "consent" }
   | { kind: "starting"; step: "microphone" | "connecting" }
-  | { kind: "in-call"; conversationId: string; sessionConfig: VoiceSessionConfig; stream: MediaStream }
+  | {
+      kind: "in-call";
+      conversationId: string;
+      sessionConfig: VoiceSessionConfig;
+      maxDurationSeconds: number;
+      stream: MediaStream;
+    }
   | { kind: "ended"; conversationId: string }
   | { kind: "error"; message: string; conversationId: string | null };
 
@@ -128,6 +135,8 @@ export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prep
         kind: "in-call",
         conversationId: payload.conversationId,
         sessionConfig: payload.sessionConfig,
+        maxDurationSeconds:
+          typeof payload.maxDurationSeconds === "number" ? payload.maxDurationSeconds : MAX_SESSION_SECONDS,
         stream,
       });
     } catch {
@@ -202,6 +211,7 @@ export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prep
             key={phase.conversationId}
             conversationId={phase.conversationId}
             sessionConfig={phase.sessionConfig}
+            maxDurationSeconds={phase.maxDurationSeconds}
             stream={phase.stream}
             showTranscript={showTranscript}
             onEnded={handleEnded}

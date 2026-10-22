@@ -5,6 +5,8 @@ import { requireOrgContext } from "@/server/auth/session";
 import { requireRole } from "@/server/auth/tenant";
 import { createAgentSchema, updateAgentDraftSchema } from "@/lib/validation/agent";
 import { embedDomainsSchema } from "@/lib/validation/voice";
+import { resolveEntitlements } from "@/server/billing/entitlements";
+import { lockOrganization } from "@/server/billing/quota";
 
 export type AgentActionResult = { ok: true; agentId?: string } | { ok: false; error: string };
 
@@ -21,6 +23,16 @@ export async function createAgent(
   }
 
   const agent = await prisma.$transaction(async (tx) => {
+    // Locked so two concurrent creates can't both pass the plan's agent limit.
+    await lockOrganization(tx, context.organization.id);
+    const entitlements = await resolveEntitlements(tx, context.organization.id, new Date());
+    const activeAgents = await tx.agent.count({
+      where: { organizationId: context.organization.id, archivedAt: null },
+    });
+    if (activeAgents >= entitlements.maxAgents) {
+      return null;
+    }
+
     const created = await tx.agent.create({
       data: { organizationId: context.organization.id, name: parsed.data.name },
     });
@@ -43,6 +55,12 @@ export async function createAgent(
     return created;
   });
 
+  if (!agent) {
+    return {
+      ok: false,
+      error: "Your plan's agent limit is reached. Archive an agent or change plan on the Billing page.",
+    };
+  }
   return { ok: true, agentId: agent.id };
 }
 

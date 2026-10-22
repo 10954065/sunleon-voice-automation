@@ -30,7 +30,7 @@ This document describes the intended product end-state across all phases. **Stat
 4. **Test a conversation, publish an agent version** — Phase 2 (config) / Phase 3 (real voice conversation).
 5. **Embed a voice widget on a website** — Phase 3.
 6. **View conversations, usage, leads** — Phase 5 (dashboards use Phase 1–4 data as it accumulates).
-7. **Manage plan, billing, usage limits** — Phase 4.
+7. **Manage plan, billing, usage limits** — Phase 4: plans, usage, limits, overage budget and history are built; online payment through Paystack is built but BLOCKED until a Paystack account is configured (platform admins can assign plans manually meanwhile).
 8. **Receive/make phone calls** — Phase 6.
 
 ## Illustrative pricing (NOT final — configurable, unverified economics)
@@ -41,7 +41,7 @@ This document describes the intended product end-state across all phases. **Stat
 | Growth | GHS 799/month | 500 |
 | Enterprise | Custom | Custom |
 
-These numbers come directly from the product brief as placeholders. They are not wired to real billing until Phase 4, and must not be presented to real customers as final until provider costs are measured (Part C, Decision 2).
+These numbers come directly from the product brief as placeholders. Since Phase 4 they are seeded as configurable plans (plus a free 10-minute, 14-day trial), but they must not be presented to real customers as final until provider costs are measured (Part C, Decision 2). Overage is off on every plan until then.
 
 ## Non-negotiables carried into every phase
 

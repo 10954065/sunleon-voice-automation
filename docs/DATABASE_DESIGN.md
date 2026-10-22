@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 1–3 schema implemented: auth/orgs/roles, Agent Studio and the knowledge base, and voice sessions (`Conversation`, `UsageEvent`, `Lead`). Phase 4+ models (`Plan`, `Subscription`, billing-grade usage) are sketched at the bottom as a plan, **not implemented**.
+Phase 1–4 schema implemented: auth/orgs/roles, Agent Studio and the knowledge base, voice sessions (`Conversation`, `UsageEvent`, `Lead`), and billing (`Plan`, `Subscription`, `UsageLedgerEntry`, `UsageAlert`, `ProviderCostRate`, `BillingTransaction`, `PaymentWebhookEvent`). Phase 5+ (stored transcripts, retention) is not implemented.
 
 ## Provider
 
@@ -120,15 +120,44 @@ One row per voice session, test or embedded.
 | closeReason, errorMessage | String? | e.g. `user_ended`, `remote_disconnected`, `token_mint_failed` |
 
 ### `UsageEvent`
-Append-only event log per conversation: `SESSION_STARTED` (token minted), `SESSION_ENDED` (with `serverDurationSeconds` and a separately labelled `clientReportedSeconds`), `TOOL_CALL` (`search_knowledge`, `capture_lead`), `ERROR` (e.g. mint failure). Indexed by `(organizationId, createdAt)` and `conversationId`.
-
-**Not yet billing-grade:** no `idempotencyKey`, no provider cost, no quantity units. Phase 4 adds those (unique idempotency key so retried webhooks can't double-count) and reconciles durations against the Gateway's own usage data.
+Append-only event log per conversation: `SESSION_STARTED` (token minted), `SESSION_ENDED` (with `chargedSeconds`, `usageSource` and a separately labelled `clientReportedSeconds`), `TOOL_CALL` (`search_knowledge`, `capture_lead`), `ERROR` (e.g. mint failure). Indexed by `(organizationId, createdAt)` and `conversationId`. This is the activity log; the billable record is `UsageLedgerEntry` (Phase 4).
 
 ### `Lead`
 Visitor-submitted contact details (name/phone/email/note, all optional but at least one contact field is required by validation). `organizationId` and `agentId` are copied from the conversation, never taken from the request. `conversationId` is `SET NULL` on conversation deletion so leads outlive session records.
 
-## Phase 4+ schema sketch (NOT IMPLEMENTED)
+## Phase 4 schema (implemented)
 
-- `UsageEvent` additions: `provider`, `kind`, `quantity`, `costEstimate`, `idempotencyKey` (unique).
-- `Plan` / `Subscription` (organizationId, planId, status, currentPeriodUsageMinutes).
-- `ConversationEvent` / stored transcripts with retention policy (Phase 5).
+Migrations `20261022131745_phase4_billing` and `20261022140000_phase4_subscription_billing_anchor`. Money is stored as integers in minor units (pesewas); cost estimates in micro-units of GHS (1e-6). CHECK constraints keep ledger quantities, overage budgets, reservations and plan limits non-negative (Prisma can't express them; they live in the migration SQL).
+
+New columns:
+
+| Table.field | Type | Notes |
+|---|---|---|
+| `User.isPlatformAdmin` | Boolean | Cross-tenant admin console access. No UI grants it; set by SQL. Checked against the database on every request. |
+| `Organization.overageBudgetMinor` | Int | Owner-approved maximum overage per period. 0 = hard stop at included minutes. |
+| `Conversation.reservedSeconds` | Int | Allowance held for this session when it was prepared; also its maximum length (the widget's cut-off). |
+
+### `Plan`
+`code` (unique), `name`, `priceMinor`, `currency` (GHS), `includedMinutes`, `maxConcurrentSessions`, `maxAgents`, `overageRateMinorPerMinute` (null = no overage), `warningThresholdPercent`, `isTrial` + `trialDays`, `isPublic` (self-serve), `active`, `paystackPlanCode` (unique). The migration seeds `trial`, `starter` and `growth` with the brief's illustrative values.
+
+### `Subscription`
+One per organization (`organizationId` unique). `planId`, `status` (`ACTIVE` / `NON_RENEWING` / `PAST_DUE` / `CANCELED`), `provider` (`PAYSTACK` / `MANUAL`), `billingAnchorAt` and `paidThroughAt`. Billing periods are calendar months counted from the anchor; entitlements apply only while now < `paidThroughAt`, whatever the status. An on-time renewal extends `paidThroughAt` on the same anchor; a late one re-anchors. Paystack's `providerCustomerCode`, `providerSubscriptionCode` (unique) and `providerEmailToken` (needed to cancel; not a payment credential).
+
+### `UsageLedgerEntry`
+The billable record. One row per voice session: `organizationId`, `agentId`, `conversationId`, `metric` (`VOICE_SECONDS`), `quantity`, `occurredAt` (the session start — decides the period), `source` (`server_clock` or `sweeper_reservation`), `provider`, `model`, `estimatedCostMicros` (snapshot; null when no rate is set), and `idempotencyKey` (unique: `voice-session:<conversationId>`). Indexed by `(organizationId, occurredAt)`.
+
+### `UsageAlert`
+`kind` (`THRESHOLD_WARNING` / `ALLOWANCE_EXHAUSTED`), `periodStart`, `usedSeconds`, `allowanceSeconds`. Unique on `(organizationId, kind, periodStart)`: at most one of each per period.
+
+### `ProviderCostRate`
+Admin-entered estimate: `metric`, `provider`, `model` (unique together), `microsPerUnit` (micro-GHS per voice second), a required `note` saying where the number came from, `updatedByUserId`.
+
+### `BillingTransaction`
+One per payment attempt or renewal: `reference` (unique — ours, `slv_<uuid>`, for checkouts; Paystack's for renewals), `kind` (`INITIAL` / `RENEWAL`), `status` (`PENDING` / `SUCCESS` / `FAILED` / `REJECTED`), `amountMinor`, `currency`, `planId`, `customerEmail`, `paidAt`, `failureReason`. `REJECTED` = Paystack reported success but the amount, currency or plan didn't match ours.
+
+### `PaymentWebhookEvent`
+Verified webhook deliveries only: `provider` + `eventKey` (SHA-256 of the raw body) unique, `eventType`, `status` (`PROCESSED` / `IGNORED`), `organizationId`, a minimal `summary` (codes, references, outcome — never card or authorization data), `note`. Written in the same transaction as the event's effects.
+
+## Phase 5+ (not implemented)
+
+- Stored transcripts / conversation events with a retention policy.

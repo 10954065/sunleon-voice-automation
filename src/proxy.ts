@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 
 import { auth } from "@/server/auth/config";
 
-const PROTECTED_PREFIXES = ["/dashboard", "/onboarding"];
+// Sign-in gate only; /admin pages also check the platform-admin flag server-side.
+const PROTECTED_PREFIXES = ["/dashboard", "/onboarding", "/admin"];
 
 export default auth((req) => {
   const isProtected = PROTECTED_PREFIXES.some((prefix) =>
@@ -16,5 +17,5 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/onboarding/:path*"],
+  matcher: ["/dashboard/:path*", "/onboarding/:path*", "/admin/:path*"],
 };

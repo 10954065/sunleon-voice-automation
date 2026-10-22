@@ -2,7 +2,7 @@
 
 ## Status
 
-Describes the test setup actually in place through Phase 3. Coverage numbers in phase reports are real `vitest` output, never estimated or fabricated.
+Describes the test setup actually in place through Phase 4. Coverage numbers in phase reports are real `vitest` output, never estimated or fabricated.
 
 ## Test levels
 
@@ -54,10 +54,25 @@ Phase 3 (the realtime provider is replaced by a clearly-labelled test double at 
 - Instruction assembly puts platform rules before business-supplied text and fences knowledge as reference data.
 - Embed domain management: owners only, normalized, de-duplicated, audit-logged; URLs and wildcards rejected; agent managers and other orgs refused.
 
+Phase 4 (the payment provider is replaced by a clearly labelled test double at the provider boundary, and webhook payloads are built to Paystack's documented shapes and signed with a test key — these tests are not evidence that a live Paystack account works):
+- Entitlements: a subscription grants its plan only before its paid-through date; cancelled, past-due and non-renewing subscriptions keep access to that date; the trial applies once, only to organizations that never subscribed; overage allowance = budget ÷ rate.
+- Billing windows: calendar months from the anchor with month-end clamping (Jan 31 → Feb 28/29); on-time renewals keep the anchor, late ones re-anchor.
+- Quotas: no plan → refused with nothing created; trial = 10 minutes, one session at a time; reservation capped at 15 minutes and at what's left; refused under 30 seconds; overage budget extends exactly as far as it pays for; earlier periods ignored; public visitors get a generic message.
+- Races: 6 parallel prepares against a limit of 2 → exactly 2 succeed; 6 parallel prepares against 20 minutes reserve exactly 900 + 300 seconds.
+- Ledger: 5 concurrent ends plus a late beacon → one ledger row and one `SESSION_ENDED`; duplicate idempotency keys rejected by the database; usage attributed to the right organization and agent with isolated summaries; cost snapshot present only when a rate is configured; warning and exhausted alerts raised once per period.
+- Sweeper: an abandoned session is closed and charged its reservation once, a later end report adds nothing, a live session is untouched, an unstarted one is closed without charge, and an organization's next prepare sweeps its own sessions.
+- Webhooks: no secret → 503 and nothing stored; bad or missing signature → 401 and nothing touched; malformed body → 400; checkout charge activates the right organization; identical redelivery → duplicate; 4 concurrent deliveries → processed once; Paystack's API disagreeing → nothing granted; amount or currency mismatch → `REJECTED`; verification outage → 503 then success on retry; `subscription.create` before `charge.success` → 503 then stored; renewals on time and late; one customer's renewal never touches another organization; past due keeps access until the paid-through date; cancellation can't be revived by later notices; card authorization data never stored.
+- Actions: checkout BLOCKED without a key (provider never called); OWNER/ADMIN only; server-chosen amount and reference; trial, private, unlinked and unknown plans refused; provider failure marks the transaction failed; no second renewing subscription; confirmation idempotent and organization-scoped; cancellation owner-only, waits for Paystack's codes, keeps access; overage budget owner-only, validated and audited; agent limit enforced with archived agents excluded.
+- Platform admin: organization owners without the flag are refused; plan edits audited; trial plans can't be made public or linked; duplicate codes rejected; manual assignment refused over a renewing Paystack subscription; cost rate stored per second with its source.
+- Paystack adapter: request bodies and headers, refusal of non-Paystack checkout links, error envelopes without a `data` field, network failures, and no secret in error messages.
+- Routes: webhook status mapping and 413 for oversized bodies; cron route 503 / 401 / 200.
+
+Verified manually in a real browser (Playwright) in Phase 4, without a Paystack key: trial on the Overview and Billing pages, the "Paystack isn't configured" notice, saving an overage budget, `/admin/billing` returning 404 to non-admins and loading after the SQL grant, manual assignment of Growth reflected on the organization's billing page, and the webhook and cron routes answering 503 over HTTP.
+
 Verified manually in a real browser (Playwright) in Phase 3, without credentials: the voice UI, the honest blocker messages, the microphone-permission-denied message, and embed authorization from an allowed host versus a non-allowed host, a direct visit and an unknown agent. The live spoken conversation is BLOCKED on `AI_GATEWAY_API_KEY`.
 
 ## CI
 
 A GitHub Actions workflow (`.github/workflows/ci.yml`) runs migrations, lint, typecheck, unit+integration tests (against a `pgvector/pgvector:pg16` service container), and the production build on every push and pull request.
 
-History, stated honestly: the workflow was first pushed in Phase 2 with a plain `postgres:16-alpine` service, which lacks pgvector, so its first runs failed at `CREATE EXTENSION vector`. This wasn't noticed until Phase 3. Fixed by matching the image to `docker-compose.yml`. That exposed a second failure: `tsc` needs the route/layout types (`LayoutProps`) that Next.js generates into `.next/types`, which a fresh checkout doesn't have, so `npm run typecheck` now runs `next typegen` first. First fully green run: 39783255519 (commit `00efb7b`). Check the Actions tab for the current state rather than assuming green.
+History, stated honestly: the workflow was first pushed in Phase 2 with a plain `postgres:16-alpine` service, which lacks pgvector, so its first runs failed at `CREATE EXTENSION vector`. This wasn't noticed until Phase 3. Fixed by matching the image to `docker-compose.yml`. That exposed a second failure: `tsc` needs the route/layout types (`LayoutProps`) that Next.js generates into `.next/types`, which a fresh checkout doesn't have, so `npm run typecheck` now runs `next typegen` first. First fully green run: 39783255519 (commit `00efb7b`). CI deliberately sets no `PAYSTACK_SECRET_KEY` or `AI_GATEWAY_API_KEY`, so it exercises the BLOCKED paths; tests that need a key set a fake one at the provider boundary. Check the Actions tab for the current state rather than assuming green.
