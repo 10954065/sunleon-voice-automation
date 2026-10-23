@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { MAX_SESSION_SECONDS } from "@/lib/voice";
+import { fitTranscript, normalizeTranscript } from "@/lib/transcript";
 import { ActiveCall, type CallEndSummary, type VoiceSessionConfig } from "./active-call";
 import { LeadCaptureForm } from "./lead-capture-form";
 
@@ -15,6 +16,7 @@ type Phase =
       conversationId: string;
       sessionConfig: VoiceSessionConfig;
       maxDurationSeconds: number;
+      transcriptStorage: boolean;
       stream: MediaStream;
     }
   | { kind: "ended"; conversationId: string }
@@ -28,6 +30,8 @@ export type VoiceWidgetProps = {
   prepareBody?: Record<string, string>;
   /** Shown above the consent notice, e.g. "Testing your current draft". */
   contextNote?: string;
+  /** Set when the business stores transcripts: the visitor is then offered an (unticked) checkbox. */
+  transcriptPolicy?: { retentionDays: number } | null;
 };
 
 function microphoneErrorMessage(error: unknown): string {
@@ -49,6 +53,22 @@ function stopStream(stream: MediaStream) {
   stream.getTracks().forEach((track) => track.stop());
 }
 
+type TranscriptDraft = Array<{ role: string; text: string }>;
+
+/** The end-report fields for a session, including the transcript only when it may be stored. */
+function endReport(
+  reason: string,
+  transcriptStorage: boolean,
+  transcript: TranscriptDraft,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    reason,
+    ...extra,
+    ...(transcriptStorage && { transcript: fitTranscript(normalizeTranscript(transcript)) }),
+  };
+}
+
 function reportEnd(conversationId: string, body: Record<string, unknown>) {
   void fetch(`/api/voice/sessions/${conversationId}/end`, {
     method: "POST",
@@ -58,10 +78,22 @@ function reportEnd(conversationId: string, body: Record<string, unknown>) {
   }).catch(() => undefined);
 }
 
-export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prepareBody, contextNote }: VoiceWidgetProps) {
+export function VoiceWidget({
+  businessName,
+  leadCaptureEnabled,
+  prepareUrl,
+  prepareBody,
+  contextNote,
+  transcriptPolicy,
+}: VoiceWidgetProps) {
   const [phase, setPhase] = useState<Phase>({ kind: "consent" });
   const [showTranscript, setShowTranscript] = useState(true);
+  const [saveTranscript, setSaveTranscript] = useState(false);
   const phaseRef = useRef(phase);
+  const transcriptRef = useRef<TranscriptDraft>([]);
+  const handleTranscriptChange = useCallback((entries: TranscriptDraft) => {
+    transcriptRef.current = entries;
+  }, []);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -72,7 +104,8 @@ export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prep
     function handlePageHide() {
       const current = phaseRef.current;
       if (current.kind === "in-call") {
-        const blob = new Blob([JSON.stringify({ reason: "page_closed" })], { type: "application/json" });
+        const report = endReport("page_closed", current.transcriptStorage, transcriptRef.current);
+        const blob = new Blob([JSON.stringify(report)], { type: "application/json" });
         navigator.sendBeacon(`/api/voice/sessions/${current.conversationId}/end`, blob);
       }
     }
@@ -87,7 +120,7 @@ export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prep
       const current = phaseRef.current;
       if (current.kind === "in-call") {
         stopStream(current.stream);
-        reportEnd(current.conversationId, { reason: "widget_closed" });
+        reportEnd(current.conversationId, endReport("widget_closed", current.transcriptStorage, transcriptRef.current));
       }
     };
   }, []);
@@ -119,7 +152,7 @@ export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prep
       const response = await fetch(prepareUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(prepareBody ?? {}),
+        body: JSON.stringify({ ...prepareBody, transcriptConsent: Boolean(transcriptPolicy) && saveTranscript }),
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.conversationId || !payload?.sessionConfig) {
@@ -137,8 +170,10 @@ export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prep
         sessionConfig: payload.sessionConfig,
         maxDurationSeconds:
           typeof payload.maxDurationSeconds === "number" ? payload.maxDurationSeconds : MAX_SESSION_SECONDS,
+        transcriptStorage: payload.transcriptStorage === true,
         stream,
       });
+      transcriptRef.current = [];
     } catch {
       stopStream(stream);
       setPhase({
@@ -155,10 +190,12 @@ export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prep
       return;
     }
     stopStream(current.stream);
-    reportEnd(current.conversationId, {
-      reason: summary.reason,
-      ...(summary.usageSeconds != null && { clientReportedSeconds: Math.round(summary.usageSeconds) }),
-    });
+    reportEnd(
+      current.conversationId,
+      endReport(summary.reason, current.transcriptStorage, transcriptRef.current, {
+        ...(summary.usageSeconds != null && { clientReportedSeconds: Math.round(summary.usageSeconds) }),
+      })
+    );
     setPhase({ kind: "ended", conversationId: current.conversationId });
   }, []);
 
@@ -168,7 +205,7 @@ export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prep
       return;
     }
     stopStream(current.stream);
-    reportEnd(current.conversationId, { reason: "client_error" });
+    reportEnd(current.conversationId, endReport("client_error", current.transcriptStorage, transcriptRef.current));
     setPhase({
       kind: "error",
       message: `The call was interrupted: ${message}`,
@@ -184,9 +221,25 @@ export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prep
         <div className="space-y-3">
           <p className="text-sm text-stone-700">
             You&apos;re about to talk with an <strong>AI voice assistant</strong> for {businessName}. Your voice is
-            streamed to our AI provider to generate spoken replies. This widget does not record or store your audio
-            or the transcript; it logs only session timing and any contact details you choose to share.
+            streamed to our AI provider to generate spoken replies. Your audio is never recorded or stored.{" "}
+            {transcriptPolicy
+              ? `A text transcript is kept only if you tick the box below (for ${transcriptPolicy.retentionDays} days); otherwise only session timing and any contact details you choose to share are logged.`
+              : "No transcript is stored; only session timing and any contact details you choose to share are logged."}
           </p>
+          {transcriptPolicy ? (
+            <label className="flex items-start gap-2 text-sm text-stone-700">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={saveTranscript}
+                disabled={phase.kind === "starting"}
+                onChange={(event) => setSaveTranscript(event.target.checked)}
+              />
+              <span>
+                Let {businessName} keep a text transcript of this conversation for {transcriptPolicy.retentionDays} days.
+              </span>
+            </label>
+          ) : null}
           <Button type="button" onClick={() => void startConversation()} disabled={phase.kind === "starting"}>
             {phase.kind !== "starting"
               ? "Allow microphone and start talking"
@@ -216,7 +269,11 @@ export function VoiceWidget({ businessName, leadCaptureEnabled, prepareUrl, prep
             showTranscript={showTranscript}
             onEnded={handleEnded}
             onFailed={handleFailed}
+            onTranscriptChange={handleTranscriptChange}
           />
+          {phase.transcriptStorage ? (
+            <p className="text-xs text-stone-500">A text transcript of this call will be saved, as you agreed.</p>
+          ) : null}
           {leadCaptureEnabled ? (
             <LeadCaptureForm conversationId={phase.conversationId} businessName={businessName} />
           ) : null}

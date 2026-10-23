@@ -59,13 +59,15 @@ The dashboard "Test voice" panel uses the same widget, with step 1 replaced by a
 
 **Billing (Phase 4)** wraps that flow. When a session is prepared, `reserveVoiceSeconds` (in `src/server/billing/quota.ts`) runs inside the transaction that creates the conversation. Under a per-organization advisory lock it sweeps abandoned sessions, resolves entitlements (subscription within its paid-through date → the trial → none), and checks the simultaneous-session limit and remaining minutes. It stores the reservation on the conversation, and that becomes the widget's cut-off. Ending a session (or the sweeper) settles it once into `UsageLedgerEntry` and raises at most one warning and one exhausted alert per period. Payments go through the Paystack adapter: checkout (server action) → Paystack → return page verification and/or a signed webhook → `applySuccessfulCharge` → `Subscription`. Platform admins manage plans, cost rates and manual assignments in `/admin/billing`. The cron route `/api/cron/sweep-sessions` is a daily backstop for the sweeper.
 
+**Analytics and data controls (Phase 5)** sit on the same tables. Settling a session also classifies its outcome from recorded facts; a lead recorded later upgrades it, under a row lock that orders the two. When the owner enables transcripts and the visitor ticks the box, the widget sends its transcript with the end report and `storeTranscript` keeps it once. Summaries are generated on request through the Gateway. History, analytics and exports query `Conversation` joined to `UsageLedgerEntry`, always scoped to the caller's organization. A daily, `CRON_SECRET`-protected `/api/cron/retention` deletes transcripts and leads past each organization's window. Both cron jobs record a `JobRun`. `src/instrumentation.ts` sends every uncaught server error to `reportError` (scrubbed log line plus a grouped `ErrorReport`). `/admin` (organizations, monitoring, audit, billing) reads these for platform admins without exposing customer content.
+
 Still planned, not yet built: a background job runner (async ingestion), Redis (durable rate limiting), S3-compatible storage, email notifications (usage alerts are in-app only), telephony adapters (Phase 6), and a server-side voice relay if instruction confidentiality or server-enforced session caps become requirements.
 
 ## Why Next.js App Router
 
 Chosen because (a) the spec prefers it, (b) the target deploy platform is Vercel (Next.js-native), (c) Server Components let tenant-scoped data fetching happen server-side by default, reducing the chance of leaking cross-tenant data to the client. See `docs/DECISIONS.md`.
 
-## Directory layout (Phase 4)
+## Directory layout (Phase 5)
 
 ```
 src/
@@ -75,12 +77,16 @@ src/
     dashboard/[orgSlug]/   # protected, tenant-scoped app shell
       agents/              # Agent Studio, knowledge base, voice test/embed/activity UI
       billing/             # plan, usage, overage budget, checkout, cancel, history (Phase 4)
-    admin/billing/         # platform-admin console: plans, cost rate, margin report (Phase 4)
+      analytics/ conversations/ leads/ settings/ audit/   # Phase 5: analytics, history, leads, data & privacy, audit log
+    admin/                 # platform console: organizations, monitoring, audit (Phase 5), billing (Phase 4)
     widget/[agentId]/      # public iframe page for embedded voice (Phase 3)
     api/auth/[...nextauth]/ # Auth.js route handler
     api/voice/             # session prepare/token/end, search-knowledge tool, leads (Phase 3)
     api/webhooks/paystack/ # signed Paystack webhook receiver (Phase 4)
     api/cron/sweep-sessions/ # CRON_SECRET-protected abandoned-session sweeper (Phase 4)
+    api/cron/retention/    # CRON_SECRET-protected daily retention job (Phase 5)
+    api/orgs/[orgSlug]/exports/[kind]/ # CSV exports (Phase 5)
+    api/health/            # public up/down check (Phase 5)
   server/
     auth/
       config.ts            # Auth.js (NextAuth) setup
@@ -91,6 +97,9 @@ src/
     knowledge/              # Phase 2 pipeline: chunk, extract, ssrf, embeddings, storage, retrieval, pipeline
     voice/                  # Phase 3: provider, session lifecycle, instructions, embed tickets, domains, rate limit
     billing/                # Phase 4: entitlements, quota, usage ledger, sweeper, paystack, charges, webhooks, report
+    conversations/          # Phase 5: outcome rules, transcripts, summaries, history queries
+    analytics/ leads/ audit/ exports/ privacy/ admin/   # Phase 5: reports, queries, CSV, retention and erasure, platform overview
+    observability/          # Phase 5: error reporting, job runs
     db/                    # Prisma client singleton
   lib/                     # shared utilities (validation schemas, etc.)
   components/              # UI components (shadcn/ui-based) and voice-widget/ (Phase 3)

@@ -54,6 +54,12 @@ Important constraint found while building: the Gateway realtime model **ignores 
 2. In the Paystack dashboard, create monthly GHS plans with the same amounts as Starter and Growth; paste each `PLN_` code into the plan in `/admin/billing`. A plan without a code can't be bought online.
 3. Set the webhook URL to `https://<your-host>/api/webhooks/paystack`. Paystack's documented sending IPs can additionally be allow-listed at the edge; the signature check doesn't depend on it.
 
+## Phase 5 — Summaries and error reporting
+
+**Conversation summaries** use the same Vercel AI Gateway key (`AI_GATEWAY_API_KEY`) through the AI SDK's `generateText`, with the model `anthropic/claude-haiku-4.5`, behind the `ConversationSummarizer` interface in `src/server/conversations/summaries.ts`. **Not verified:** no summary has been generated against the real Gateway, and the model's availability on the account must be checked. Without a key the conversation page says summaries aren't available, and the action returns that message instead of calling anything.
+
+**Error reporting** is in-house for now: structured JSON log lines plus a grouped `ErrorReport` table shown on `/admin/monitoring`. No third-party tracker (e.g. Sentry) or alerting service is integrated. Adding one later means calling it from `reportError`, plus a DSN and a data-processing review.
+
 ## Phase 6 — Telephony
 
 | Need | Candidates to evaluate | Notes |
@@ -74,6 +80,7 @@ Important constraint found while building: the Gateway realtime model **ignores 
 - **Phases 2 and 3 (now):** `AI_GATEWAY_API_KEY` — one key unblocks both real embeddings and real voice sessions. It must have access to `openai/gpt-realtime-2` on the Gateway (check the Gateway model list for your team). Allowed embed domains are configured per agent in Agent Studio, not via env vars.
 - **Before production (any phase):** a managed Postgres provider with pgvector support, an S3-compatible object storage provider (to replace the local-disk adapter), and a linked Vercel project.
 - **Phase 4:** Paystack account and secret key (`PAYSTACK_SECRET_KEY`, which also verifies webhooks), GHS plans created in the Paystack dashboard, the webhook URL set; plus `CRON_SECRET` for the session sweeper. Until then, platform admins assign plans manually.
+- **Phase 5:** nothing new. `AI_GATEWAY_API_KEY` also unlocks summaries; `CRON_SECRET` now also runs the retention job. Optional later: an error-tracking service and an alerting channel.
 - **Phase 6:** telephony provider account + API keys, phone number provisioning.
 
 None of these blocked Phase 1 or the non-embedding parts of Phase 2.

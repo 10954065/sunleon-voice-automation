@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { MAX_TRANSCRIPT_ENTRIES, MAX_TRANSCRIPT_ENTRY_CHARS } from "@/lib/transcript";
+
 export const conversationIdSchema = z.string().uuid("Invalid conversation id.");
 
 export const searchKnowledgeSchema = z.object({
@@ -24,8 +26,30 @@ export const endSessionSchema = z.object({
   clientReportedSeconds: z.number().int().min(0).max(24 * 60 * 60).optional(),
 });
 
+/**
+ * Sent alongside the end report when the visitor consented to a stored transcript. Parsed apart
+ * from endSessionSchema so a malformed transcript never stops the session from being ended.
+ * Over-long entries are rejected here rather than silently cut, since the widget trims first.
+ */
+export const transcriptSchema = z
+  .array(
+    z.object({
+      role: z.enum(["user", "assistant"]),
+      text: z.string().max(MAX_TRANSCRIPT_ENTRY_CHARS),
+    })
+  )
+  .max(MAX_TRANSCRIPT_ENTRIES);
+
+/** The visitor's answer to "save a transcript?" — only meaningful when the business stores transcripts. */
+const transcriptConsentField = z.boolean().optional().default(false);
+
+export const prepareTestSessionSchema = z.object({
+  transcriptConsent: transcriptConsentField,
+});
+
 export const prepareEmbedSessionSchema = z.object({
   ticket: z.string().min(10).max(2000),
+  transcriptConsent: transcriptConsentField,
 });
 
 export const embedDomainsSchema = z

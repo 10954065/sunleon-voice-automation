@@ -130,6 +130,11 @@ export default async function AgentDetailPage({
               businessName={context.organization.name}
               leadCaptureEnabled={latestVersion.leadCaptureEnabled}
               prepareUrl={`/api/voice/sessions/test/${agent.id}?org=${encodeURIComponent(orgSlug)}`}
+              transcriptPolicy={
+                context.organization.storeTranscripts
+                  ? { retentionDays: context.organization.transcriptRetentionDays }
+                  : null
+              }
             />
           </CardContent>
         </Card>
@@ -154,6 +159,8 @@ export default async function AgentDetailPage({
       </Card>
 
       <VoiceActivity
+        orgSlug={orgSlug}
+        agentId={agent.id}
         conversations={agent.conversations.map((c) => ({
           id: c.id,
           channel: c.channel,

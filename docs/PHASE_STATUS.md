@@ -1,6 +1,6 @@
 # Phase Status — Sunleon Voice
 
-Last updated: 2026-10-22 (Phase 4 implementation).
+Last updated: 2026-10-23 (Phase 5 implementation).
 
 | Phase | Status |
 |---|---|
@@ -9,7 +9,7 @@ Last updated: 2026-10-22 (Phase 4 implementation).
 | 2 — Agent Studio and knowledge ingestion | VERIFIED (embeddings credential-blocked — see below) |
 | 3 — Real-time AI voice MVP | BLOCKED — built and tested up to the provider; live conversation needs `AI_GATEWAY_API_KEY` (see below) |
 | 4 — Usage, plans, and billing | BLOCKED — metering, plans, limits and the admin console built and verified; live Paystack payments need `PAYSTACK_SECRET_KEY` (see below) |
-| 5 — Analytics and operational controls | NOT STARTED |
+| 5 — Analytics and operational controls | VERIFIED — history, analytics, leads, exports, retention, audit, admin, monitoring and error reporting built and tested; AI summaries need `AI_GATEWAY_API_KEY` (see below) |
 | 6 — Telephony | NOT STARTED |
 | 7 — Advanced voice and integrations | NOT STARTED |
 | 8 — Production hardening | NOT STARTED |
@@ -310,6 +310,109 @@ See `docs/KNOWN_LIMITATIONS.md` → "Phase 4 — billing". The most important: n
 3. Set `CRON_SECRET`; set `PAYSTACK_SECRET_KEY` and run the Paystack checklist above.
 4. Enter a voice cost rate in `/admin/billing` once real provider charges are known.
 
-### Phase 5 acceptance criteria (for reference, not yet attempted)
+## Phase 5 — Analytics and operational controls: VERIFIED (AI summaries credential-blocked)
 
-Analytics reflect real events, access is authorized, and retention and deletion behavior is tested.
+Everything in the Phase 5 brief is built, tested against real Postgres and checked in a real browser. Two pieces depend on credentials from earlier phases and are reported as such. **AI summaries** are built behind a provider interface and tested with a test double, but no summary has been generated against the real Gateway (`AI_GATEWAY_API_KEY` unset); the page says so instead of offering the button. **Stored transcripts** can only arise from live voice sessions, which are still BLOCKED (Phase 3); the storage path is tested end to end through the real end-session route.
+
+### What was built
+
+- **Outcome classification** (`src/server/conversations/outcome.ts`): every finished session gets one outcome, decided from recorded facts only, in this order: FAILED → NOT_CONNECTED (no provider token) → LEAD_CAPTURED → ABANDONED (closed by the sweeper) → SHORT (< 15 s billed) → ENGAGED. Set when the session settles, upgraded when a lead arrives after the call, set to FAILED on a token failure. Lead recording now takes a row lock, which closes a race with settlement and makes the 3-leads-per-session cap atomic. The migration backfills existing sessions with the same rules.
+- **Permitted transcripts**: off by default. When an owner turns them on, the widget's consent notice changes and shows an **unticked** checkbox ("Let {business} keep a text transcript … for N days"). A transcript is accepted only if the visitor ticked it when the session was prepared (`Conversation.transcriptConsent`), storage is still on, the session really connected, and it arrives within 10 minutes of the end. It is write-once. The widget sends it with the end report (and in the page-close beacon, trimmed to fit). It is labelled in the dashboard as reported by the caller's browser, not verified against the provider.
+- **Summaries** (`src/server/conversations/summaries.ts`): on request (Agent Manager and above, 10 per organization per minute), through the Gateway (`anthropic/claude-haiku-4.5`, unverified). The transcript is passed as delimited data with an instruction to ignore instructions inside it; the output is shown as plain text and labelled AI-generated. Stored with the transcript and deleted with it.
+- **Conversation history** (`/dashboard/[orgSlug]/conversations` and `/conversations/[id]`): filters (period, channel, outcome, agent), keyset pagination, billed time from the ledger, and a detail page with metadata, transcript, summary, leads and the server-side event timeline.
+- **Analytics** (`/dashboard/[orgSlug]/analytics`, `src/server/analytics/report.ts`): sessions, connected, voice time, average length, leads captured, lead rate, sessions per UTC day (zero-filled, with a table alternative), outcomes, and channel and agent breakdowns. Computed from `Conversation` joined to its `UsageLedgerEntry`, so voice time equals the billable ledger exactly. Lead conversion uses the outcome, so it survives lead deletion.
+- **Leads** (`/dashboard/[orgSlug]/leads`): filters, pagination, follow-up status (New, Contacted, Closed; Agent Manager and above), delete (Owner/Admin), links to the conversation.
+- **Exports** (`/api/orgs/[orgSlug]/exports/conversations|leads`): CSV with BOM and CRLF line endings, at most 10,000 rows (a header says when the export was cut short), with spreadsheet formula injection neutralised. Conversation exports (metadata only, no transcript or contact data) are open to every member. Lead exports (personal data) are Owner/Admin only. Every export is audit-logged; non-members get 404.
+- **Retention controls** (`/dashboard/[orgSlug]/settings`, Owner): transcript storage on/off, transcript retention 1–365 days (default 30), lead retention 30–1095 days (default 365), all enforced by database CHECK constraints too. **Delete all transcripts** needs the typed confirmation "DELETE". **Erase a person's data** (Owner/Admin) deletes leads matched by email or phone (normalised: "+233 24 …", "024 …" and "233…" all match) and transcripts of those conversations or mentioning the email. Its audit entry records counts only.
+- **Retention job** (`/api/cron/retention`, daily 03:30 UTC, `CRON_SECRET`): deletes transcripts and leads past each organization's own window, one audit entry per organization; prunes error reports and job runs older than 90 days. Idempotent.
+- **Audit logs**: an organization view (`/dashboard/[orgSlug]/audit`, Owner/Admin, filter by area) and a platform view (`/admin/audit`). New audited actions: `privacy.*`, `retention.*`, `export.*`, `lead.deleted`.
+- **Admin tools**: `/admin` (every organization with plan, members, agents, 30-day sessions and voice time, and transcript setting; counts only, no customer content), `/admin/monitoring`, `/admin/audit`, plus the existing billing console under one admin layout.
+- **Monitoring** (`/admin/monitoring`): database reachability; which credentials are configured (presence only, never values); each scheduled job's last run and last success (flagged if none in 26 hours); 24-hour errors, failed sessions and session errors; stuck sessions; failed knowledge sources; 7-day payment problems and webhook counts; recent failed sessions; and the grouped error list. `GET /api/health` is a public up/down check (no details).
+- **Error reporting**: `src/instrumentation.ts` (`onRequestError`) records every uncaught server error in pages, route handlers, server actions and the proxy. `reportError` writes a structured log line and an `ErrorReport` row grouped by fingerprint, with emails, phone numbers, credentials and connection strings scrubbed first. Only the route pattern is recorded, never the request path, headers or cookies. Scheduled jobs record a `JobRun` and report failures. `src/app/error.tsx` shows visitors a generic message with the error's digest as a support reference.
+
+### Acceptance criteria (from the master build prompt) — status
+
+| Criterion | Status |
+|---|---|
+| Analytics reflect real events | **Met.** Tests drive real sessions through the session service (prepare → token → end → lead) and check every figure, including that voice time equals the ledger sum and that days bucket by UTC across midnight. |
+| Access is authorized | **Met.** Every query is scoped to the caller's organization, resolved from their membership. Tested: cross-tenant detail, transcript deletion, lead changes, summaries, exports and pagination cursors; role rules for each action; owner/admin-only audit and lead export; 404 for non-members and non-admins. |
+| Retention and deletion behavior is tested | **Met.** Tested: per-organization windows (older deleted, newer kept, other tenants untouched), one audit entry per organization, idempotent re-runs, monitoring pruning, erasure across phone formats and email case (scoped, literal matching), deleting one or all transcripts, deleting a lead, and analytics surviving deletion. |
+
+### Quality gates — actual results
+
+- `npm run typecheck`: clean.
+- `npm run lint`: 0 errors, 1 warning (the generated `coverage/` folder, as before).
+- `npm run test:coverage`: **319 tests in 38 files, all passing.** Statements **85.66%**. New modules: `server/analytics` 97%, `server/privacy` 100%, `server/exports` 96%, `server/conversations` 89%.
+- `npm run build`: succeeds; all new pages and routes present.
+- Migration `20261022220935_phase5_analytics_privacy`: spurious `DROP INDEX` removed; adds CHECK constraints and the outcome backfill. Applied with `migrate deploy`.
+
+### Manual verification (real browser, no AI or Paystack keys)
+
+Sessions can't be held without `AI_GATEWAY_API_KEY`, so 14 sample sessions (with ledger rows, events, 3 leads and 1 transcript) were inserted by SQL into the dev database for a new workspace. The tests above are the proof that figures match real events; this pass checked the pages.
+
+- **Analytics:** 14 sessions, 13 connected, 17.3 min, 3 leads, a 23% lead rate, the daily chart and outcome counts, all matching the inserted rows.
+- **Conversations:** the "Lead captured" filter showed exactly 3 rows. The detail page showed the transcript with "deleted automatically on 21 Nov 2026", the summary BLOCKED notice, the lead and the timeline.
+- **Data & privacy:**
+  - Saved transcripts on with 14 and 180 days.
+  - Erasing by "024 123 4567" removed the lead stored as "+233 24 123 4567" plus its transcript.
+  - The audit log shows both actions, the erasure with counts only.
+- **Widget and leads:**
+  - The agent's test widget then showed the 14-day consent text and an unticked checkbox.
+  - The leads page listed the remaining 2 leads.
+- **Exports:**
+  - The lead CSV downloaded with the formula-looking name exported as `'=1+1 …`.
+  - The conversation CSV had 14 rows and no contact data.
+  - Exporting for another organization returned 404.
+- **Platform admin:** after the SQL grant, `/admin` listed the organization with counts, and `/admin/monitoring` showed the database up, the three missing credentials, both jobs never run, and the failed session.
+- **Over HTTP:**
+  - `/api/health` → `{"status":"ok"}`.
+  - `/api/cron/retention` without `CRON_SECRET` → 503.
+  - A signed-out export → 401.
+- **Not observed live:** `onRequestError` (no real server error occurred during the session; `reportError` itself is tested).
+- **Dev-only incident:** the dev server got into a reload loop (recompiling about every 250 ms) after the build cache in `.next/` went stale while the schema and route types were regenerated under a running server. Deleting `.next/` fixed it; nothing in the app code was involved (confirmed by moving the new instrumentation and error files aside, which didn't help). Stop `npm run dev` before `npm run build` or `next typegen`.
+
+### Security controls implemented (new this phase)
+
+- **Tenant scoping and roles:**
+  - Every query is scoped by the caller's `organizationId`.
+  - Keyset cursors are positions only.
+  - Roles per action: Analysts are read-only; transcript and lead deletion and lead export are Owner/Admin; settings and delete-all are Owner only.
+- **Transcripts:** explicit visitor opt-in (unticked by default), re-checked server-side, write-once, a 10-minute window, a 128 KB body limit, schema validation, and a malformed transcript never blocks the end report.
+- **Exports:** formula-injection-safe and row-capped.
+- **Audit and erasure:** retention and erasure are audit-logged without contact details.
+- **Error reporting:**
+  - Error text is scrubbed of personal data and secrets before logging or storage.
+  - The error page shows no internals.
+  - Monitoring shows configuration presence, never values.
+- **Summaries:** the transcript is passed as delimited data, the output is rendered as plain text, and requests are rate-limited.
+
+Full detail in `docs/SECURITY_MODEL.md`.
+
+### Required environment variables
+
+None new. `CRON_SECRET` now protects both cron routes; `AI_GATEWAY_API_KEY` also unlocks summaries.
+
+### External accounts/credentials still needed
+
+- `AI_GATEWAY_API_KEY`: live voice (and so real transcripts), embeddings, and summaries (check that `anthropic/claude-haiku-4.5` is available on the account).
+- `PAYSTACK_SECRET_KEY` and a Paystack account (Phase 4).
+- An error-tracking service (e.g. Sentry) and an alerting channel if monitoring should page someone. Not required by the brief; nothing is wired.
+
+### Known limitations / blockers
+
+See `docs/KNOWN_LIMITATIONS.md` → "Phase 5 — analytics and data controls". The most important:
+- **Transcripts:** they come from the visitor's browser (unverified) and currently hold the agent's speech only.
+- **Summaries:** none has been generated live, and their model cost is not metered.
+- **Alerting:** monitoring is a page, with no alerts.
+- **Workspace deletion:** deleting a whole workspace is still a manual support task.
+
+### Manual steps for the developer
+
+1. `npx prisma migrate deploy`.
+2. Make sure `CRON_SECRET` is set in Vercel; `vercel.json` now schedules `/api/cron/sweep-sessions` (03:00 UTC) and `/api/cron/retention` (03:30 UTC).
+3. Point an uptime monitor at `GET /api/health`.
+4. With `AI_GATEWAY_API_KEY` set: turn transcripts on in Data & privacy, hold a test call with the box ticked, confirm the transcript appears on the conversation page, then click Summarise.
+
+### Phase 6 acceptance criteria (for reference, not yet attempted)
+
+A configured test number completes an end-to-end call where supported, events are idempotent, and usage reconciliation is documented.

@@ -17,6 +17,8 @@ export async function resetDatabase() {
   await prisma.user.deleteMany();
   await prisma.paymentWebhookEvent.deleteMany();
   await prisma.providerCostRate.deleteMany();
+  await prisma.errorReport.deleteMany();
+  await prisma.jobRun.deleteMany();
   await prisma.plan.deleteMany({ where: { id: { notIn: SEEDED_PLANS.map((plan) => plan.id) } } });
   for (const { id, ...values } of SEEDED_PLANS) {
     await prisma.plan.update({
@@ -58,3 +60,45 @@ export async function grantTestPlan(
   });
   return plan;
 }
+
+/**
+ * An organization with one agent (version 1, optionally published) on a generous test plan, ready
+ * for voice sessions. `storeTranscripts` sets the organization's transcript setting.
+ */
+export async function seedVoiceOrganization(
+  slug: string,
+  options: {
+    leadCapture?: boolean;
+    storeTranscripts?: boolean;
+    publish?: boolean;
+    agentName?: string;
+    /** The plan's billing anchor is a day before this; set it earlier to run sessions in the past. */
+    planFrom?: Date;
+  } = {}
+) {
+  const organization = await prisma.organization.create({
+    data: { name: `Org ${slug}`, slug, storeTranscripts: options.storeTranscripts ?? false },
+  });
+  await grantTestPlan(organization.id, {}, options.planFrom);
+  const agent = await prisma.agent.create({
+    data: { organizationId: organization.id, name: options.agentName ?? `Agent ${slug}`, allowedEmbedDomains: ["shop.example"] },
+  });
+  const version = await prisma.agentVersion.create({
+    data: {
+      agentId: agent.id,
+      versionNumber: 1,
+      instructions: `Instructions for ${slug}`,
+      leadCaptureEnabled: options.leadCapture ?? true,
+      publishedAt: options.publish ? new Date() : null,
+    },
+  });
+  if (options.publish) {
+    await prisma.agent.update({ where: { id: agent.id }, data: { publishedVersionId: version.id } });
+  }
+  return { organization, agent, version };
+}
+
+/** Test double at the realtime-provider boundary: proves our lifecycle, not that the live Gateway works. */
+export const fakeVoiceProvider = {
+  mintToken: async () => ({ token: "vcst_test_double", url: "wss://gateway.invalid/realtime", expiresAt: 4_102_444_800 }),
+};

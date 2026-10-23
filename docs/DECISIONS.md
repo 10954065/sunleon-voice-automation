@@ -151,3 +151,29 @@ Append-only log of significant decisions. Each entry: date, decision, context, a
 ## 2026-10-22 — Platform admin is a database flag with no grant UI
 
 **Decision:** Cross-tenant access is `User.isPlatformAdmin`, read from the database on every request (not from the session token, so revocation is immediate), and granted only by SQL. The existing `SUPER_ADMIN` role is a per-organization membership rank and doesn't confer cross-tenant access. Non-admins get a 404 for `/admin/*`, so the console's existence isn't revealed.
+
+## 2026-10-23 — Transcripts are opt-in per visitor and come from the browser
+
+**Context:** The brief asks for "permitted transcripts". There is no server-side voice relay (Phase 3), so the only copy of the conversation text is in the caller's browser.
+
+**Decision:** Off by default. When the owner turns storage on, each visitor sees an unticked box and must tick it before the call. The server snapshots that consent on the conversation and re-checks it, and the owner's setting, when the transcript arrives with the end report. It also requires a connected session and arrival within 10 minutes; the transcript is write-once. Transcripts are labelled "reported by the caller's browser". A server relay would make them verifiable; revisit with Phase 8.
+
+## 2026-10-23 — Outcomes are classified by rules from recorded facts, not by a model
+
+**Decision:** One outcome per finished session, from the order FAILED → NOT_CONNECTED → LEAD_CAPTURED → ABANDONED → SHORT (< 15 s) → ENGAGED. It is cheap, explainable, testable, and available without credentials. Judging whether a caller's question was resolved needs a transcript and a model; that can be layered on top of summaries later without changing these outcomes.
+
+## 2026-10-23 — Analytics are computed on request from the source tables
+
+**Decision:** No pre-aggregated tables. Analytics read `Conversation` joined to its single `UsageLedgerEntry`, so voice time always equals the billable ledger and nothing can drift. Lead conversion uses the session outcome, so it survives lead deletion. Indexes on `(organizationId, startedAt)` keep this fast at pilot scale; pre-aggregation is a later optimisation.
+
+## 2026-10-23 — Summaries on request, not after every call
+
+**Decision:** A staff member clicks "Summarise" (Agent Manager and above, rate-limited). Model cost is then only spent on conversations someone reads, and nothing is generated for visitors whose transcript nobody opens. Summaries are personal data like the transcript and are deleted with it.
+
+## 2026-10-23 — Retention keeps session records, deletes personal content
+
+**Decision:** Each organization sets transcript (1–365 days) and lead (30–1095 days) windows; a daily job deletes past them, with one audit entry per organization. Session records, the usage ledger and audit entries hold no visitor contact details or transcript text and are kept: history, analytics and billing depend on them. Erasure deletes a person's leads and the transcripts it can match, and logs counts only.
+
+## 2026-10-23 — In-house error reporting until there is an error-tracking account
+
+**Decision:** `src/instrumentation.ts` (`onRequestError`) and the cron jobs call `reportError`. It writes a scrubbed JSON log line (for the host's log drain) and a grouped `ErrorReport` row shown on `/admin/monitoring`. No third-party tracker is added without an account and a data-processing review; `reportError` is the single place to forward errors to one later.

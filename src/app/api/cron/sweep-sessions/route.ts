@@ -1,13 +1,8 @@
-import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
+import { authorizeCronRequest } from "@/server/auth/cron";
 import { sweepStaleSessions } from "@/server/billing/sweeper";
-
-function isAuthorized(header: string | null, secret: string): boolean {
-  const expected = Buffer.from(`Bearer ${secret}`, "utf8");
-  const received = Buffer.from(header ?? "", "utf8");
-  return expected.length === received.length && timingSafeEqual(expected, received);
-}
+import { runJob } from "@/server/observability/jobs";
 
 /**
  * Backstop that closes abandoned voice sessions platform-wide and charges them their reservation.
@@ -15,14 +10,13 @@ function isAuthorized(header: string | null, secret: string): boolean {
  * that stop starting sessions. Vercel Cron sends `Authorization: Bearer $CRON_SECRET`.
  */
 export async function GET(request: NextRequest) {
-  const secret = process.env.CRON_SECRET?.trim();
-  if (!secret) {
-    return NextResponse.json({ error: "CRON_SECRET is not configured." }, { status: 503 });
-  }
-  if (!isAuthorized(request.headers.get("authorization"), secret)) {
-    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  const authorization = authorizeCronRequest(request.headers.get("authorization"));
+  if (!authorization.ok) {
+    return NextResponse.json({ error: authorization.error }, { status: authorization.status });
   }
 
-  const result = await sweepStaleSessions();
-  return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
+  const run = await runJob("sweep-sessions", () => sweepStaleSessions());
+  return run.ok
+    ? NextResponse.json(run.result, { headers: { "Cache-Control": "no-store" } })
+    : NextResponse.json({ error: "The sweep failed. See /admin/monitoring." }, { status: 500 });
 }

@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { prisma } from "@/server/db/client";
@@ -62,10 +61,7 @@ export default async function AdminBillingPage() {
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-8 py-8">
       <div>
-        <Link href="/dashboard" className="text-sm text-stone-500 hover:text-stone-700">
-          ← Dashboard
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold text-stone-950">Platform billing</h1>
+        <h1 className="text-2xl font-semibold text-stone-950">Platform billing</h1>
         <p className="mt-1 text-sm text-stone-500">
           Cross-tenant view for platform admins. Costs are estimates from the configured rate, not provider invoices.
           Paystack: {isPaymentConfigured() ? "configured" : "NOT configured (checkout and webhooks are blocked)"}.

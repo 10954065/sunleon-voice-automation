@@ -4,7 +4,6 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 
 ## Scope gaps (by design — later phases)
 
-- No conversation analytics dashboard, exports, transcript storage, retention controls, or admin console (Phase 5). Phase 3 shows only the last 10 sessions and 20 leads per agent.
 - No telephony (Phase 6).
 - No custom/cloned voices and no native-language validation (Phase 7).
 - **No configurable live human handoff.** The agent is instructed to offer to connect callers with a person, and lead capture is the hand-off path for now. Live transfer belongs with telephony (Phase 6).
@@ -23,7 +22,7 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 - **Embedding requires an exact hostname.** `example.com` does not cover `www.example.com`; each must be listed. No wildcards, by design.
 - **Voices are OpenAI's built-in set, unverified through the Gateway and unevaluated for Ghanaian English** (pronunciation, names, places, cedi amounts, code-switching). Decision 3 of the brief requires that evaluation before any quality claim.
 - **Caller speech isn't transcribed.** The transcript shows the agent's speech; enabling input transcription needs a provider-specific transcription model to be confirmed in a credentialed session first.
-- **Transcripts are not stored.** They exist only in the caller's browser during the call (the consent notice says so). Storage with retention controls is Phase 5.
+- **Transcripts are stored only with consent (since Phase 5).** Without the owner's setting and the visitor's tick they exist only in the caller's browser during the call. See "Phase 5" below.
 
 ## Phase 4 — billing
 
@@ -36,8 +35,23 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 - **Failed renewals aren't retried by Paystack** (per their docs). The subscription goes `PAST_DUE`, access continues to the paid-through date, then voice stops until the owner pays again (a fresh checkout).
 - **Usage alerts are in-app only** (Overview and Billing banners). No email or SMS — no messaging provider yet.
 - **Concurrency and allowance checks serialise per organization** with a Postgres advisory lock held for a few milliseconds. Fine at pilot scale; very high per-organization session rates would queue.
-- **Platform admin is granted with SQL.** By design there is no UI to make someone a platform admin; see `docs/DEPLOYMENT_RUNBOOK.md`. The admin console covers billing only (Phase 5 adds the rest).
+- **Platform admin is granted with SQL.** By design there is no UI to make someone a platform admin; see `docs/DEPLOYMENT_RUNBOOK.md`.
 - **The daily cron is a backstop.** Vercel Hobby crons run at most daily; abandoned sessions in an organization are also swept whenever it next starts a session, so allowance isn't held long in practice.
+
+## Phase 5 — analytics and data controls
+
+- **Transcripts come from the visitor's browser and aren't verified.** There is no server-side relay, so the stored text is whatever the widget sent at the end of the call. A tampered client could store made-up text for its own session. That is bounded: the visitor must have consented, it is write-once, it must arrive within 10 minutes of the end, and size is limited. The dashboard labels transcripts accordingly.
+- **Transcripts currently hold the agent's speech only.** Caller speech isn't transcribed (Phase 3 limitation), so the "Caller" lines will usually be missing until input transcription is enabled with live credentials.
+- **No transcript has been captured from a live call**, because live voice is still BLOCKED on `AI_GATEWAY_API_KEY`. The path is tested through the real end-session route with a test double at the provider.
+- **No AI summary has been generated live.** Summaries run through the Gateway with `anthropic/claude-haiku-4.5`, which is unverified on this account. Their model cost is not recorded in the usage ledger or the cost report. The 10-per-minute limit is per server process.
+- **Outcomes are rule-based and coarse.** They record what happened (connected, length, lead, failure), not whether the caller's question was resolved. A lead deleted later still leaves its session marked "Lead captured", by design, so analytics stay stable.
+- **Analytics are computed on request** from the session and ledger tables, by UTC day and by session start time (a call that crosses midnight counts on its start day). Fine at pilot scale; large tenants will need pre-aggregation. Dashboard test calls are included unless filtered out.
+- **Retention runs once a day**, so data can outlive its window by up to a day. Once database backups exist, deleted data stays in them until they expire; backup retention must be set to match (Phase 8). Session records, the usage ledger and the audit log have no expiry. They hold no visitor contact details or transcript text, but the audit log names members.
+- **Erasure finds what it can match.** It finds leads by email or phone, and transcripts by the leads' conversations or by the email appearing in the text. A phone number or name spoken in a transcript isn't found; delete such transcripts individually.
+- **Deleting a whole workspace or user account isn't self-serve.** It needs a support task, which must also cancel any Paystack subscription. Deleting an organization row cascades to its billing records, so this must not be done casually.
+- **Exports are capped** at 10,000 rows per file over preset periods (up to 365 days), and are built in memory rather than streamed.
+- **Monitoring is a page, not an alerting system.** There is no external error tracker (e.g. Sentry) and nothing pages anyone. Browser-side errors aren't reported, only server errors. `onRequestError` hasn't yet been seen handling a real server error (the reporter itself is tested).
+- **The audit log is append-only by convention**: the app never edits or deletes entries, but it isn't cryptographically tamper-evident and database administrators can change it.
 
 ## Earlier-phase gaps still open
 
@@ -51,13 +65,14 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 - **`prisma migrate dev` has a known false-positive drift** around the hand-managed pgvector index, and its interactive "name the new migration" prompt blocks in non-interactive shells (it left orphaned processes holding the migration lock during Phase 3). Use `--create-only` to generate and `prisma migrate deploy` to apply — see `docs/DECISIONS.md`.
 - **Integration tests reset the local development database.** They share the `sunleon_voice` database with `npm run dev`, so running the suite wipes any manual test data. A separate test database is a cheap follow-up.
 - **8 npm audit advisories (5 high, 3 moderate)** in dev-only or CLI-only dependency paths (`eslint-config-next` → `braces`; `mammoth` → `argparse` CLI). None is reachable from production code or user input. Phase 3 added `@ai-sdk/gateway` and `@ai-sdk/react` with no new advisories.
-- **Coverage is 83.9% statements (246 tests), above the 80% target**, but uneven: the Auth.js wrappers (`src/server/auth/config.ts`, `session.ts`, `sign-in.ts`), the real-network branches of the SSRF-safe fetcher and the PDF/DOCX extraction branches remain largely untested. The coverage scope is `src/lib/**` and `src/server/**`, so route handlers and React components are exercised but not counted.
+- **Coverage is 85.7% statements (319 tests), above the 80% target**, but uneven: the Auth.js wrappers (`src/server/auth/config.ts`, `session.ts`, `sign-in.ts`), the real-network branches of the SSRF-safe fetcher and the PDF/DOCX extraction branches remain largely untested. The coverage scope is `src/lib/**` and `src/server/**`, so route handlers and React components are exercised but not counted.
 - **Next.js dev tooling auto-generates `AGENTS.md`.** This is Next.js 16's own file, not an AI-attribution artifact.
 
 ## Things this document explicitly does not claim
 
 - No claim that a live voice conversation works yet.
 - No claim that a live Paystack payment, renewal or cancellation works yet.
+- No claim that AI conversation summaries, or transcripts from live calls, work yet.
 - No claim that the illustrative prices are profitable — margins are unknown until real costs are entered.
 - No claim of Ghanaian-language support (Twi, Ga, Ewe, etc.) or of Ghanaian-English voice quality.
 - No claim of telephony availability in Ghana or anywhere else.

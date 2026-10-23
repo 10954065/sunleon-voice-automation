@@ -32,7 +32,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   try {
-    const prepared = await prepareEmbedVoiceSession({ agentId, ticket: parsed.data.ticket });
+    const prepared = await prepareEmbedVoiceSession({
+      agentId,
+      ticket: parsed.data.ticket,
+      transcriptConsent: parsed.data.transcriptConsent,
+    });
     return NextResponse.json(prepared);
   } catch (error) {
     if (error instanceof VoiceSessionError) {

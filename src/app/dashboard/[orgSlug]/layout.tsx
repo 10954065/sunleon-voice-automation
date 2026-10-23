@@ -11,10 +11,16 @@ export const instant = false;
 
 const NAV_ITEMS = [
   { href: "", label: "Overview" },
+  { href: "/analytics", label: "Analytics" },
+  { href: "/conversations", label: "Conversations" },
+  { href: "/leads", label: "Leads" },
   { href: "/agents", label: "Agents" },
   { href: "/members", label: "Members" },
   { href: "/billing", label: "Billing" },
+  { href: "/settings", label: "Data & privacy" },
 ];
+// The audit log names who did what, so it is limited like other admin surfaces.
+const ADMIN_NAV_ITEMS = [{ href: "/audit", label: "Audit log" }];
 
 export default async function OrgDashboardLayout({
   children,
@@ -35,6 +41,8 @@ export default async function OrgDashboardLayout({
     throw error;
   }
   const showPlatformAdmin = await isPlatformAdmin(context.user.id);
+  const navItems =
+    context.role === "OWNER" || context.role === "ADMIN" ? [...NAV_ITEMS, ...ADMIN_NAV_ITEMS] : NAV_ITEMS;
 
   return (
     <div className="flex flex-1">
@@ -42,7 +50,7 @@ export default async function OrgDashboardLayout({
         <p className="mb-1 text-sm font-semibold text-stone-950">{context.organization.name}</p>
         <p className="mb-6 text-xs text-stone-500">Signed in as {context.user.email} · {context.role}</p>
         <nav className="space-y-1">
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <Link
               key={item.label}
               href={`/dashboard/${orgSlug}${item.href}`}
@@ -53,7 +61,7 @@ export default async function OrgDashboardLayout({
           ))}
           {showPlatformAdmin ? (
             <Link
-              href="/admin/billing"
+              href="/admin"
               className="block rounded-md px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50"
             >
               Platform admin

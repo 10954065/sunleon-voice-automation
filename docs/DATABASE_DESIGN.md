@@ -158,6 +158,32 @@ One per payment attempt or renewal: `reference` (unique — ours, `slv_<uuid>`, 
 ### `PaymentWebhookEvent`
 Verified webhook deliveries only: `provider` + `eventKey` (SHA-256 of the raw body) unique, `eventType`, `status` (`PROCESSED` / `IGNORED`), `organizationId`, a minimal `summary` (codes, references, outcome — never card or authorization data), `note`. Written in the same transaction as the event's effects.
 
-## Phase 5+ (not implemented)
+## Phase 5 schema (implemented)
 
-- Stored transcripts / conversation events with a retention policy.
+Migration `20261022220935_phase5_analytics_privacy`. CHECK constraints keep the retention windows in range (transcripts 1–365 days, leads 30–1095), transcript entry counts non-negative and error-report counts positive. The migration also backfills `Conversation.outcome` for sessions that ended before it existed, using the same rules as the application.
+
+New columns:
+
+| Table.field | Type | Notes |
+|---|---|---|
+| `Organization.storeTranscripts` | Boolean | Owner setting, default off. Visitors are only offered a transcript when on. |
+| `Organization.transcriptRetentionDays` | Int | Default 30. The daily retention job deletes older transcripts (and their summaries). |
+| `Organization.leadRetentionDays` | Int | Default 365. The daily retention job deletes older leads. |
+| `Conversation.transcriptConsent` | Boolean | Snapshot when prepared: storage was on and the visitor ticked the box. |
+| `Conversation.outcome` | `ConversationOutcome?` | `NOT_CONNECTED`, `FAILED`, `ABANDONED`, `SHORT`, `ENGAGED`, `LEAD_CAPTURED`; null while active. |
+| `Lead.status`, `Lead.statusChangedAt` | `LeadStatus`, DateTime? | `NEW` / `CONTACTED` / `CLOSED` follow-up tracking. |
+
+New indexes: `Conversation(organizationId, startedAt)` and `Lead(organizationId, createdAt)` for history, analytics and retention; `AuditLog(createdAt)` for the platform audit view.
+
+### `ConversationTranscript`
+One per conversation (`conversationId` unique), with `organizationId`, `entries` (JSON `[{role: "user" | "assistant", text}]` as reported by the caller's browser), `entryCount`, and an optional AI `summary` with `summaryModel` and `summarizedAt`. Deleted with its conversation, by the retention job, by erasure, or by an owner or admin.
+
+### `ErrorReport`
+Server errors grouped by `fingerprint` (unique SHA-256 of source, route pattern and the message with numbers and ids normalised): `source`, `route`, scrubbed `message` and `stack`, `digest`, `occurrences`, `firstSeenAt`, `lastSeenAt`. Pruned after 90 days without a repeat. Holds no tenant id.
+
+### `JobRun`
+One row per scheduled-job run: `job`, `status` (`SUCCEEDED` / `FAILED`), `startedAt`, `finishedAt`, `details` (the job's counts) or `error`. Pruned after 90 days.
+
+## Phase 6+ (not implemented)
+
+- Telephony call records and provider events.

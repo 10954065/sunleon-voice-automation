@@ -40,6 +40,8 @@ npm run dev
 
 **Testing voice locally.** The dashboard's "Test voice" panel needs `AI_GATEWAY_API_KEY`. To test the embedded widget, serve any page on a hostname listed in the agent's "Allowed websites" (e.g. a page on `localhost:<another port>` with `localhost` allowed) containing the snippet from Agent Studio. Browsers only grant microphone access on `https://` or `localhost`.
 
+**Dev server and builds.** Stop `npm run dev` before running `npm run build` or `npm run typecheck` (`next typegen`): both write into `.next/`. In Phase 5 a stale `.next/` made the dev server recompile and reload pages in a loop. If that happens, stop the server, delete `.next/` and start it again.
+
 **Note on `--ignore-scripts`:** this machine's npm config restricts install scripts to an explicit allowlist (`allow-scripts` in `~/.npmrc`), as a supply-chain-attack guardrail. `--ignore-scripts` was used to scaffold this project because none of the current dependencies (Next.js, Prisma, Tailwind, Auth.js) require install-time scripts for correct operation on this platform. If a future dependency does need a postinstall step (e.g., a native binary build), add it explicitly to the allowlist rather than disabling the guardrail wholesale.
 
 ## Required environment variables
@@ -53,7 +55,7 @@ See `.env.example` for the authoritative list.
 | `NEXTAUTH_URL` | Base URL of the app (e.g. `http://localhost:3000` locally) | Phase 1 |
 | `AI_GATEWAY_API_KEY` | Vercel AI Gateway key, server-side only. Phase 2: knowledge-base embeddings. Phase 3: minting single-use realtime voice tokens for `openai/gpt-realtime-2` (the key's team must have access to that model). Without it, knowledge sources fail at the embedding step and voice sessions refuse to start, both with a clear error — see `docs/KNOWN_LIMITATIONS.md`. | Phase 2 (voice: Phase 3) |
 | `PAYSTACK_SECRET_KEY` | Paystack secret key, server-side only. Starts checkouts, verifies transactions, cancels subscriptions, and verifies webhook signatures. Optional: without it, online payment and the webhook are BLOCKED (503) and plans are assigned manually in `/admin/billing`. | Phase 4 |
-| `CRON_SECRET` | Bearer secret for `/api/cron/sweep-sessions` (Vercel Cron sends it automatically when set in the project). Without it the route answers 503; sessions are still swept per organization. | Phase 4 |
+| `CRON_SECRET` | Bearer secret for `/api/cron/sweep-sessions` and `/api/cron/retention` (Vercel Cron sends it automatically when set in the project). Without it both routes answer 503: sessions are still swept per organization, but **retention deletions don't run**. | Phase 4 |
 
 ## Platform admin and billing setup (Phase 4)
 
@@ -64,7 +66,13 @@ See `.env.example` for the authoritative list.
    (Locally: `docker compose exec -T postgres psql -U sunleon -d sunleon_voice -c "<the statement>"`.) Revoke by setting it to `false`; it takes effect on the next request.
 2. In `/admin/billing`, review the seeded plans (Trial, Starter, Growth — illustrative values) and enter a **voice cost rate** once real Gateway charges are known.
 3. **Paystack** (when the account exists): set `PAYSTACK_SECRET_KEY`; create matching monthly GHS plans in the Paystack dashboard and paste each `PLN_` code into the plan; set the webhook URL to `https://<host>/api/webhooks/paystack`; then run the Paystack checklist in `docs/PHASE_STATUS.md`.
-4. **Cron:** `vercel.json` schedules `/api/cron/sweep-sessions` daily at 03:00 UTC (the Hobby plan allows at most daily). Set `CRON_SECRET` in the Vercel project.
+4. **Cron:** `vercel.json` schedules `/api/cron/sweep-sessions` daily at 03:00 UTC and `/api/cron/retention` at 03:30 UTC (the Hobby plan allows at most daily runs; if a plan refuses two cron jobs, call both routes from one schedule). Set `CRON_SECRET` in the Vercel project. `/admin/monitoring` shows each job's last run and flags one that hasn't succeeded in 26 hours.
+
+## Monitoring (Phase 5)
+
+- Point an uptime monitor at `GET /api/health` (200 `{"status":"ok"}`, or 503 when the database is unreachable).
+- Check `/admin/monitoring` regularly: there is no alerting yet. Server errors also appear as JSON lines (`"level":"error"`) in the host's logs.
+- To test retention by hand: `curl -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/cron/retention`.
 
 ## Production deployment (planned, not yet done)
 

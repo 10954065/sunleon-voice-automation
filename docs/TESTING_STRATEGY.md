@@ -2,7 +2,7 @@
 
 ## Status
 
-Describes the test setup actually in place through Phase 4. Coverage numbers in phase reports are real `vitest` output, never estimated or fabricated.
+Describes the test setup actually in place through Phase 5. Coverage numbers in phase reports are real `vitest` output, never estimated or fabricated.
 
 ## Test levels
 
@@ -66,6 +66,53 @@ Phase 4 (the payment provider is replaced by a clearly labelled test double at t
 - Platform admin: organization owners without the flag are refused; plan edits audited; trial plans can't be made public or linked; duplicate codes rejected; manual assignment refused over a renewing Paystack subscription; cost rate stored per second with its source.
 - Paystack adapter: request bodies and headers, refusal of non-Paystack checkout links, error envelopes without a `data` field, network failures, and no secret in error messages.
 - Routes: webhook status mapping and 413 for oversized bodies; cron route 503 / 401 / 200.
+
+Phase 5 (`tests/integration/conversation-records.test.ts`, `analytics.test.ts`, `privacy-retention.test.ts`, `privacy-actions.test.ts`, `monitoring-admin.test.ts`, `tests/unit/conversation-helpers.test.ts`, `history-validation.test.ts`):
+- **Outcomes:**
+  - Each outcome is reached through the real session service (prepare → token → end, the sweeper, a failed mint).
+  - A lead after the call upgrades the outcome, and a lead during the call counts at settlement.
+  - 6 concurrent lead submissions → exactly 3 stored.
+- **Transcripts:**
+  - Consent is recorded only when storage is on, and storage is refused without consent.
+  - They are also refused when the session never connected, after the window, or once the owner turns storage off.
+  - They are write-once, empty ones are rejected, and a malformed transcript still lets the session end through the real route.
+- **Summaries:** scoped to the organization; BLOCKED message without a key; explained when there's no transcript; Analysts refused; invalid ids and the per-organization cap enforced.
+- **Analytics:**
+  - Every figure for sessions driven through the real services, with voice time equal to the ledger sum.
+  - UTC day bucketing across midnight with zero-filled days.
+  - Another organization's sessions are never counted; agent, channel and range filters work.
+  - In-progress sessions are counted separately, and lead conversion survives retention deleting the leads.
+- **Retention:**
+  - Per-organization windows: older rows deleted, newer kept, other tenants untouched.
+  - Session records kept; one audit entry per organization with counts; a second run is a no-op.
+  - Error reports and job runs are pruned.
+- **Erasure:** phone formats normalised; email matched case-insensitively; scoped to one organization; LIKE wildcards literal; nothing happens without a usable email or phone.
+- **Actions:**
+  - Data settings: Owner-only, range-checked and audited.
+  - Transcript deletion: Owner/Admin only and organization-scoped.
+  - Delete-all: needs the typed confirmation.
+  - Erasure: its audit entry holds counts only.
+  - Lead status: Agent Manager and above; lead changes are organization-scoped.
+  - Lead deletion: audited by id only.
+- **Exports:**
+  - Any member gets conversation metadata without transcripts or contact details.
+  - Lead export is Owner/Admin only, with formulas neutralised.
+  - Other organization → 404; signed out → 401.
+- **Monitoring:**
+  - Errors are grouped, scrubbed, and reported without throwing.
+  - Job runs are recorded for success and failure.
+  - Both cron routes answer 503 / 401 / 200 and record their runs.
+  - The monitoring snapshot counts are right; the organization list shows counts only.
+  - History pagination has no gaps or duplicates, filters work, and a foreign cursor reveals nothing.
+  - Detail, leads and audit queries are organization-scoped.
+- **Pure helpers:** the outcome precedence, transcript trimming and byte fitting, CSV quoting, the scrubber, fingerprints, URL filter parsing (invalid values ignored), the UTC day range, and the privacy form schemas.
+
+Verified manually in a real browser (Playwright) in Phase 5, with sample sessions inserted by SQL because live voice is BLOCKED (details in `docs/PHASE_STATUS.md`):
+- the analytics figures, the outcome filter, the conversation detail page with its transcript and the summary BLOCKED notice
+- saving data settings, erasing a contact by a differently formatted phone number, and the audit entries
+- the consent checkbox in the test widget
+- the lead and conversation CSVs, including formula neutralising and a 404 for another organization
+- the platform organizations and monitoring pages
 
 Verified manually in a real browser (Playwright) in Phase 4, without a Paystack key: trial on the Overview and Billing pages, the "Paystack isn't configured" notice, saving an overage budget, `/admin/billing` returning 404 to non-admins and loading after the SQL grant, manual assignment of Growth reflected on the organization's billing page, and the webhook and cron routes answering 503 over HTTP.
 

@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "@/server/db/client";
 import { MAX_SESSION_SECONDS, REALTIME_VOICE_MODEL } from "@/lib/voice";
 import { resolveEntitlements, type Db, type Entitlements } from "./entitlements";
+import { classifyOutcome } from "@/server/conversations/outcome";
 import type { Conversation, Prisma } from "@/generated/prisma/client";
 
 export const VOICE_PROVIDER_ID = "vercel-ai-gateway";
@@ -92,6 +93,16 @@ export async function settleConversation(
   }
 
   const chargedSeconds = conversation.tokenIssuedAt ? Math.max(0, Math.round(params.chargedSeconds)) : 0;
+  // Counted after the claim: recordLead locks this row before inserting, so a lead either commits
+  // before the claim (and is counted here) or waits and then upgrades the outcome itself.
+  const outcome = classifyOutcome({
+    failed: false,
+    connected: Boolean(conversation.tokenIssuedAt),
+    leadCount: await tx.lead.count({ where: { conversationId: conversation.id } }),
+    abandoned: params.source === "sweeper_reservation",
+    chargedSeconds,
+  });
+  await tx.conversation.update({ where: { id: conversation.id }, data: { outcome } });
 
   await tx.usageEvent.create({
     data: {

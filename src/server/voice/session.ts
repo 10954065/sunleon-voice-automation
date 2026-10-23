@@ -52,6 +52,8 @@ export interface PreparedVoiceSession {
   sessionConfig: VoiceSessionConfig;
   /** The seconds reserved against the organization's allowance; the widget ends the call at this point. */
   maxDurationSeconds: number;
+  /** True when this conversation may store a transcript (the business allows it and the visitor agreed). */
+  transcriptStorage: boolean;
 }
 
 export interface IssuedVoiceToken {
@@ -68,6 +70,7 @@ async function createConversation(params: {
   agentVersion: AgentVersion;
   channel: ConversationChannel;
   originDomain: string | null;
+  transcriptConsent: boolean;
   now?: Date;
 }): Promise<PreparedVoiceSession> {
   if (!isRealtimeVoiceConfigured()) {
@@ -100,6 +103,10 @@ async function createConversation(params: {
     // holds it can't be separated by a concurrent request.
     conversation = await prisma.$transaction(async (tx) => {
       const reservedSeconds = await reserveVoiceSeconds(tx, params.organizationId, now);
+      const organization = await tx.organization.findUniqueOrThrow({
+        where: { id: params.organizationId },
+        select: { storeTranscripts: true },
+      });
       // Server-generated (not cuid) because the id doubles as the session's bearer reference
       // for the tool and lead routes — it must be unguessable.
       return tx.conversation.create({
@@ -112,6 +119,8 @@ async function createConversation(params: {
           originDomain: params.originDomain,
           startedAt: now,
           reservedSeconds,
+          // The visitor's tick only counts if the business stores transcripts right now.
+          transcriptConsent: params.transcriptConsent && organization.storeTranscripts,
         },
       });
     }, RESERVATION_TX_OPTIONS);
@@ -128,6 +137,7 @@ async function createConversation(params: {
     conversationId: conversation.id,
     sessionConfig,
     maxDurationSeconds: conversation.reservedSeconds,
+    transcriptStorage: conversation.transcriptConsent,
   };
 }
 
@@ -136,6 +146,7 @@ export async function prepareTestVoiceSession(params: {
   organizationId: string;
   organizationName: string;
   agentId: string;
+  transcriptConsent?: boolean;
   now?: Date;
 }): Promise<PreparedVoiceSession> {
   const agent = await prisma.agent.findFirst({
@@ -160,6 +171,7 @@ export async function prepareTestVoiceSession(params: {
     agentVersion: version,
     channel: "TEST",
     originDomain: null,
+    transcriptConsent: params.transcriptConsent ?? false,
     now: params.now,
   });
 }
@@ -172,6 +184,7 @@ export async function prepareTestVoiceSession(params: {
 export async function prepareEmbedVoiceSession(params: {
   agentId: string;
   ticket: string;
+  transcriptConsent?: boolean;
   now?: Date;
 }): Promise<PreparedVoiceSession> {
   const verified = verifyEmbedTicket(params.ticket, params.agentId);
@@ -198,6 +211,7 @@ export async function prepareEmbedVoiceSession(params: {
     agentVersion: agent.publishedVersion,
     channel: "EMBED",
     originDomain: verified.host,
+    transcriptConsent: params.transcriptConsent ?? false,
     now: params.now,
   });
 }
@@ -252,7 +266,13 @@ export async function issueVoiceToken(params: {
     await prisma.$transaction([
       prisma.conversation.update({
         where: { id: conversation.id },
-        data: { status: "FAILED", endedAt: now, closeReason: "token_mint_failed", errorMessage: message },
+        data: {
+          status: "FAILED",
+          outcome: "FAILED",
+          endedAt: now,
+          closeReason: "token_mint_failed",
+          errorMessage: message,
+        },
       }),
       prisma.usageEvent.create({
         data: {
@@ -370,7 +390,7 @@ export async function recordLead(params: {
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const conversation = await prisma.conversation.findFirst({
     where: { id: params.conversationId, tokenIssuedAt: { not: null } },
-    include: { agentVersion: true, _count: { select: { leads: true } } },
+    include: { agentVersion: true },
   });
   if (!conversation) {
     return { ok: false, error: "Conversation not found." };
@@ -378,12 +398,16 @@ export async function recordLead(params: {
   if (!conversation.agentVersion.leadCaptureEnabled) {
     return { ok: false, error: "Lead capture is not enabled for this agent." };
   }
-  if (conversation._count.leads >= MAX_LEADS_PER_CONVERSATION) {
-    return { ok: false, error: "Contact details were already submitted for this conversation." };
-  }
 
-  await prisma.$transaction([
-    prisma.lead.create({
+  return prisma.$transaction(async (tx) => {
+    // Row lock: makes the per-conversation cap atomic, and orders this against settleConversation
+    // so the conversation's outcome always reflects the lead (see settleConversation).
+    await tx.$queryRaw`SELECT "id" FROM "Conversation" WHERE "id" = ${conversation.id} FOR UPDATE`;
+    if ((await tx.lead.count({ where: { conversationId: conversation.id } })) >= MAX_LEADS_PER_CONVERSATION) {
+      return { ok: false as const, error: "Contact details were already submitted for this conversation." };
+    }
+
+    await tx.lead.create({
       data: {
         organizationId: conversation.organizationId,
         agentId: conversation.agentId,
@@ -393,8 +417,8 @@ export async function recordLead(params: {
         email: params.email || null,
         note: params.note || null,
       },
-    }),
-    prisma.usageEvent.create({
+    });
+    await tx.usageEvent.create({
       data: {
         organizationId: conversation.organizationId,
         agentId: conversation.agentId,
@@ -402,8 +426,12 @@ export async function recordLead(params: {
         type: "TOOL_CALL",
         metadata: { tool: "capture_lead" },
       },
-    }),
-  ]);
-
-  return { ok: true };
+    });
+    // Leads are often submitted after the call ends; a still-active session gets its outcome at settle time.
+    await tx.conversation.updateMany({
+      where: { id: conversation.id, status: "COMPLETED" },
+      data: { outcome: "LEAD_CAPTURED" },
+    });
+    return { ok: true as const };
+  });
 }

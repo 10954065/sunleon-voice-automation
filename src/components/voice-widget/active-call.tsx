@@ -25,6 +25,8 @@ type Props = {
   showTranscript: boolean;
   onEnded: (summary: CallEndSummary) => void;
   onFailed: (message: string) => void;
+  /** Receives the transcript as it grows, so the parent can send it with the end report. */
+  onTranscriptChange?: (entries: Array<{ role: string; text: string }>) => void;
 };
 
 async function runSearchKnowledge(conversationId: string, args: unknown): Promise<unknown> {
@@ -62,6 +64,7 @@ export function ActiveCall({
   showTranscript,
   onEnded,
   onFailed,
+  onTranscriptChange,
 }: Props) {
   const model = useMemo(() => gateway.experimental_realtime(REALTIME_VOICE_MODEL), []);
   const usageSecondsRef = useRef<number | null>(null);
@@ -133,6 +136,10 @@ export function ActiveCall({
     const timer = setTimeout(() => void endCallRef.current("max_duration"), limitMs);
     return () => clearTimeout(timer);
   }, [maxDurationSeconds]);
+
+  useEffect(() => {
+    onTranscriptChange?.(messages.map((message) => ({ role: message.role, text: messageText(message) })));
+  }, [messages, onTranscriptChange]);
 
   const label =
     status === "connecting"

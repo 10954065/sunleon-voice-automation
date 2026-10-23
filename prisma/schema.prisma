@@ -16,81 +16,87 @@ enum Role {
 }
 
 model User {
-  id            String       @id @default(cuid())
-  email         String       @unique
-  passwordHash  String?
-  name          String?
+  id              String   @id @default(cuid())
+  email           String   @unique
+  passwordHash    String?
+  name            String?
   // Platform operator flag (cross-tenant admin console). Never settable from the app UI;
   // granted with a direct SQL update — see docs/DEPLOYMENT_RUNBOOK.md.
-  isPlatformAdmin Boolean    @default(false)
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  isPlatformAdmin Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  accounts      Account[]
-  sessions      Session[]
-  memberships   Membership[]
-  auditLogs     AuditLog[]   @relation("AuditLogActor")
+  accounts    Account[]
+  sessions    Session[]
+  memberships Membership[]
+  auditLogs   AuditLog[]   @relation("AuditLogActor")
 }
 
 model Organization {
-  id          String       @id @default(cuid())
-  name        String
-  slug        String       @unique
+  id                      String   @id @default(cuid())
+  name                    String
+  slug                    String   @unique
   // Most the owner allows in overage charges per billing period, in minor units (pesewas).
   // 0 = hard stop at the plan's included minutes.
-  overageBudgetMinor Int   @default(0)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  overageBudgetMinor      Int      @default(0)
+  // Transcripts are stored only when the owner turns this on AND the visitor ticks the consent
+  // box for that conversation. Retention is enforced daily by the retention job.
+  storeTranscripts        Boolean  @default(false)
+  transcriptRetentionDays Int      @default(30)
+  leadRetentionDays       Int      @default(365)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 
-  memberships      Membership[]
-  auditLogs        AuditLog[]
-  agents           Agent[]
-  knowledgeSources KnowledgeSource[]
-  conversations    Conversation[]
-  leads            Lead[]
-  subscription     Subscription?
-  usageLedger      UsageLedgerEntry[]
-  usageAlerts      UsageAlert[]
+  memberships         Membership[]
+  auditLogs           AuditLog[]
+  agents              Agent[]
+  knowledgeSources    KnowledgeSource[]
+  conversations       Conversation[]
+  leads               Lead[]
+  subscription        Subscription?
+  usageLedger         UsageLedgerEntry[]
+  usageAlerts         UsageAlert[]
   billingTransactions BillingTransaction[]
+  transcripts         ConversationTranscript[]
 }
 
 model Agent {
-  id                   String         @id @default(cuid())
-  organizationId       String
-  name                 String
-  archivedAt           DateTime?
-  publishedVersionId   String?        @unique
-  allowedEmbedDomains  String[]       @default([])
-  createdAt            DateTime       @default(now())
-  updatedAt            DateTime       @updatedAt
+  id                  String    @id @default(cuid())
+  organizationId      String
+  name                String
+  archivedAt          DateTime?
+  publishedVersionId  String?   @unique
+  allowedEmbedDomains String[]  @default([])
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  organization         Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  versions             AgentVersion[]    @relation("AgentVersions")
-  publishedVersion     AgentVersion?     @relation("PublishedVersion", fields: [publishedVersionId], references: [id])
-  knowledgeSources     KnowledgeSource[]
-  conversations        Conversation[]
-  leads                Lead[]
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  versions         AgentVersion[]    @relation("AgentVersions")
+  publishedVersion AgentVersion?     @relation("PublishedVersion", fields: [publishedVersionId], references: [id])
+  knowledgeSources KnowledgeSource[]
+  conversations    Conversation[]
+  leads            Lead[]
 
   @@index([organizationId])
 }
 
 model AgentVersion {
-  id                  String    @id @default(cuid())
-  agentId              String
-  versionNumber        Int
-  instructions         String
-  persona              String?
-  tone                 String?
-  greeting             String?
-  languages            String[] @default(["en"])
-  leadCaptureEnabled   Boolean  @default(false)
-  voice                String   @default("alloy")
-  createdAt            DateTime @default(now())
-  publishedAt          DateTime?
+  id                 String    @id @default(cuid())
+  agentId            String
+  versionNumber      Int
+  instructions       String
+  persona            String?
+  tone               String?
+  greeting           String?
+  languages          String[]  @default(["en"])
+  leadCaptureEnabled Boolean   @default(false)
+  voice              String    @default("alloy")
+  createdAt          DateTime  @default(now())
+  publishedAt        DateTime?
 
-  agent                Agent    @relation("AgentVersions", fields: [agentId], references: [id], onDelete: Cascade)
-  publishedByAgent      Agent?   @relation("PublishedVersion")
-  conversations         Conversation[]
+  agent            Agent          @relation("AgentVersions", fields: [agentId], references: [id], onDelete: Cascade)
+  publishedByAgent Agent?         @relation("PublishedVersion")
+  conversations    Conversation[]
 
   @@unique([agentId, versionNumber])
   @@index([agentId])
@@ -107,31 +113,71 @@ enum ConversationStatus {
   FAILED
 }
 
+// Classified from what actually happened (src/server/conversations/outcome.ts), never guessed.
+enum ConversationOutcome {
+  // The visitor never connected (no provider token was issued).
+  NOT_CONNECTED
+  FAILED
+  // Connected, but the browser never reported the end; closed by the sweeper.
+  ABANDONED
+  // Connected for less than SHORT_CONVERSATION_SECONDS.
+  SHORT
+  ENGAGED
+  LEAD_CAPTURED
+}
+
 model Conversation {
-  id             String              @id @default(cuid())
-  organizationId String
-  agentId        String
-  agentVersionId String
-  channel        ConversationChannel
-  status         ConversationStatus  @default(ACTIVE)
-  originDomain   String?
-  startedAt      DateTime            @default(now())
-  tokenIssuedAt  DateTime?
+  id                String               @id @default(cuid())
+  organizationId    String
+  agentId           String
+  agentVersionId    String
+  channel           ConversationChannel
+  status            ConversationStatus   @default(ACTIVE)
+  originDomain      String?
+  startedAt         DateTime             @default(now())
+  tokenIssuedAt     DateTime?
   // Voice seconds held against the organization's allowance when the session was prepared.
   // Also the session's maximum length, which the widget enforces.
-  reservedSeconds Int        @default(0)
-  endedAt        DateTime?
-  closeReason    String?
-  errorMessage   String?
+  reservedSeconds   Int                  @default(0)
+  endedAt           DateTime?
+  closeReason       String?
+  errorMessage      String?
+  // Snapshot when the session was prepared: the organization stored transcripts and the visitor
+  // ticked the consent box. A transcript is accepted only when this is true.
+  transcriptConsent Boolean              @default(false)
+  // Null while the session is active.
+  outcome           ConversationOutcome?
 
-  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  agent          Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  agentVersion   AgentVersion  @relation(fields: [agentVersionId], references: [id], onDelete: Cascade)
-  usageEvents    UsageEvent[]
-  leads          Lead[]
+  organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent                   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agentVersion AgentVersion            @relation(fields: [agentVersionId], references: [id], onDelete: Cascade)
+  usageEvents  UsageEvent[]
+  leads        Lead[]
+  transcript   ConversationTranscript?
 
   @@index([organizationId, agentId])
   @@index([agentId, startedAt])
+  @@index([organizationId, startedAt])
+}
+
+model ConversationTranscript {
+  id             String    @id @default(cuid())
+  conversationId String    @unique
+  organizationId String
+  // [{ role: "user" | "assistant", text }] as reported by the caller's browser when the call ended.
+  // Not verified against the provider (there is no server-side relay) — labelled as such in the UI.
+  entries        Json
+  entryCount     Int
+  // AI summary of the entries. Personal data like the transcript, so it is deleted with it.
+  summary        String?
+  summaryModel   String?
+  summarizedAt   DateTime?
+  createdAt      DateTime  @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
 }
 
 enum UsageEventType {
@@ -150,7 +196,7 @@ model UsageEvent {
   metadata       Json?
   createdAt      DateTime       @default(now())
 
-  conversation   Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, createdAt])
   @@index([conversationId])
@@ -181,8 +227,8 @@ model Plan {
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 
-  subscriptions             Subscription[]
-  billingTransactions       BillingTransaction[]
+  subscriptions       Subscription[]
+  billingTransactions BillingTransaction[]
 }
 
 enum SubscriptionStatus {
@@ -216,8 +262,8 @@ model Subscription {
   createdAt                DateTime           @default(now())
   updatedAt                DateTime           @updatedAt
 
-  organization             Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  plan                     Plan               @relation(fields: [planId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         Plan         @relation(fields: [planId], references: [id])
 
   @@index([providerCustomerCode])
 }
@@ -227,7 +273,7 @@ enum UsageMetric {
 }
 
 model UsageLedgerEntry {
-  id                  String       @id @default(cuid())
+  id                  String      @id @default(cuid())
   organizationId      String
   agentId             String?
   conversationId      String?
@@ -244,10 +290,10 @@ model UsageLedgerEntry {
   // using the ProviderCostRate in force when recorded. Null when no rate is configured.
   estimatedCostMicros Int?
   // Unique: a retried end request, beacon or sweep can never record the same usage twice.
-  idempotencyKey      String       @unique
-  createdAt           DateTime     @default(now())
+  idempotencyKey      String      @unique
+  createdAt           DateTime    @default(now())
 
-  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, occurredAt])
 }
@@ -258,15 +304,15 @@ enum UsageAlertKind {
 }
 
 model UsageAlert {
-  id             String         @id @default(cuid())
-  organizationId String
-  kind           UsageAlertKind
-  periodStart    DateTime
-  usedSeconds    Int
+  id               String         @id @default(cuid())
+  organizationId   String
+  kind             UsageAlertKind
+  periodStart      DateTime
+  usedSeconds      Int
   allowanceSeconds Int
-  createdAt      DateTime       @default(now())
+  createdAt        DateTime       @default(now())
 
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   // One alert of each kind per billing period.
   @@unique([organizationId, kind, periodStart])
@@ -317,8 +363,8 @@ model BillingTransaction {
   createdAt      DateTime                 @default(now())
   updatedAt      DateTime                 @updatedAt
 
-  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  plan           Plan?                    @relation(fields: [planId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         Plan?        @relation(fields: [planId], references: [id])
 
   @@index([organizationId, createdAt])
 }
@@ -345,22 +391,31 @@ model PaymentWebhookEvent {
   @@index([receivedAt])
 }
 
-model Lead {
-  id             String        @id @default(cuid())
-  organizationId String
-  agentId        String
-  conversationId String?
-  name           String?
-  phone          String?
-  email          String?
-  note           String?
-  createdAt      DateTime      @default(now())
+enum LeadStatus {
+  NEW
+  CONTACTED
+  CLOSED
+}
 
-  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  agent          Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+model Lead {
+  id              String     @id @default(cuid())
+  organizationId  String
+  agentId         String
+  conversationId  String?
+  name            String?
+  phone           String?
+  email           String?
+  note            String?
+  status          LeadStatus @default(NEW)
+  statusChangedAt DateTime?
+  createdAt       DateTime   @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, agentId])
+  @@index([organizationId, createdAt])
 }
 
 enum KnowledgeSourceType {
@@ -391,61 +446,99 @@ model KnowledgeSource {
   createdAt      DateTime              @default(now())
   updatedAt      DateTime              @updatedAt
 
-  organization   Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  agent          Agent                 @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  chunks         KnowledgeChunk[]
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  chunks       KnowledgeChunk[]
 
   @@index([organizationId])
   @@index([agentId])
 }
 
 model KnowledgeChunk {
-  id             String          @id @default(cuid())
+  id             String   @id @default(cuid())
   sourceId       String
   organizationId String
   agentId        String
   chunkIndex     Int
   content        String
-  createdAt      DateTime        @default(now())
+  createdAt      DateTime @default(now())
 
-  source         KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
 
   // Declared `Unsupported` (not a real Prisma-managed field) so `prisma migrate dev`'s
   // drift detection knows this column exists and never proposes dropping it. The column
   // itself was added by a raw-SQL migration (classic generator has no native vector type)
   // and is read/written only via $queryRaw/$executeRaw. See docs/DATABASE_DESIGN.md.
-  embedding      Unsupported("vector(1536)")?
+  embedding Unsupported("vector(1536)")?
 
-  @@index([organizationId, agentId])
   @@unique([sourceId, chunkIndex])
+  @@index([organizationId, agentId])
 }
 
 model Membership {
-  id             String       @id @default(cuid())
+  id             String   @id @default(cuid())
   userId         String
   organizationId String
   role           Role
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime @default(now())
 
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([userId, organizationId])
   @@index([organizationId])
 }
 
 model AuditLog {
-  id             String        @id @default(cuid())
+  id             String   @id @default(cuid())
   organizationId String?
   actorUserId    String?
   action         String
   metadata       Json?
-  createdAt      DateTime      @default(now())
+  createdAt      DateTime @default(now())
 
-  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  actor          User?         @relation("AuditLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?         @relation("AuditLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
+  @@index([createdAt])
+}
+
+// --- Phase 5: monitoring ---
+
+// Server errors grouped by fingerprint (source + route + normalised message). Messages and stacks
+// are scrubbed of emails, phone numbers and secrets before they are stored.
+model ErrorReport {
+  id          String   @id @default(cuid())
+  fingerprint String   @unique
+  // "render" | "route" | "action" | "proxy" | "job" | "server"
+  source      String
+  route       String?
+  message     String
+  stack       String?
+  digest      String?
+  occurrences Int      @default(1)
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@index([lastSeenAt])
+}
+
+enum JobRunStatus {
+  SUCCEEDED
+  FAILED
+}
+
+model JobRun {
+  id         String       @id @default(cuid())
+  job        String
+  status     JobRunStatus
+  startedAt  DateTime
+  finishedAt DateTime
+  details    Json?
+  error      String?
+
+  @@index([job, startedAt])
 }
 
 // --- Auth.js (NextAuth) required models ---

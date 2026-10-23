@@ -4,6 +4,7 @@ import { requireOrgContext } from "@/server/auth/session";
 import { requireRole, TenantAccessError } from "@/server/auth/tenant";
 import { prepareTestVoiceSession, VoiceSessionError } from "@/server/voice/session";
 import { MissingVoiceCredentialsError } from "@/server/voice/provider";
+import { prepareTestSessionSchema } from "@/lib/validation/voice";
 
 /**
  * Step 1 of a dashboard test call. The org slug from the query string is never trusted on
@@ -20,10 +21,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const context = await requireOrgContext(orgSlug);
     requireRole(context.role, ["OWNER", "ADMIN", "AGENT_MANAGER"]);
 
+    const body = prepareTestSessionSchema.safeParse(await request.json().catch(() => ({})));
     const prepared = await prepareTestVoiceSession({
       organizationId: context.organization.id,
       organizationName: context.organization.name,
       agentId,
+      transcriptConsent: body.success ? body.data.transcriptConsent : false,
     });
     return NextResponse.json(prepared);
   } catch (error) {

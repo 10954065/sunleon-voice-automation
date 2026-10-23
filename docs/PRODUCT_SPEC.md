@@ -16,11 +16,11 @@ This document describes the intended product end-state across all phases. **Stat
 
 | Role | Scope | Status |
 |---|---|---|
-| Platform Super Admin | Cross-tenant platform operations | Schema in place (Phase 1); admin UI not built until Phase 5 |
+| Platform Super Admin | Cross-tenant platform operations | Implemented as a database-granted platform-admin flag: billing console (Phase 4); organizations, monitoring and audit (Phase 5) |
 | Business Owner | Full control of their organization | Implemented (Phase 1): can create an org, invite members |
 | Business Administrator | Manage agents, knowledge, team, billing within an org | Role implemented (Phase 1); most admin surfaces land in Phase 2–4 |
 | Agent Manager | Create/edit/test/publish agents | Role implemented (Phase 1); Agent Studio itself is Phase 2 |
-| Analyst / Read-only | View conversations, usage, leads | Role implemented (Phase 1); analytics views are Phase 5 |
+| Analyst / Read-only | View conversations, usage, leads | Role implemented (Phase 1); analytics, history and leads views implemented in Phase 5 |
 
 ## Core user journeys (by phase)
 
@@ -29,7 +29,7 @@ This document describes the intended product end-state across all phases. **Stat
 3. **Configure an AI agent, upload knowledge** — Phase 2.
 4. **Test a conversation, publish an agent version** — Phase 2 (config) / Phase 3 (real voice conversation).
 5. **Embed a voice widget on a website** — Phase 3.
-6. **View conversations, usage, leads** — Phase 5 (dashboards use Phase 1–4 data as it accumulates).
+6. **View conversations, usage, leads** — Phase 5: analytics, conversation history with consented transcripts and on-request AI summaries (summaries BLOCKED until `AI_GATEWAY_API_KEY` is set), leads with follow-up status, CSV exports, retention settings and erasure, and an audit log.
 7. **Manage plan, billing, usage limits** — Phase 4: plans, usage, limits, overage budget and history are built; online payment through Paystack is built but BLOCKED until a Paystack account is configured (platform admins can assign plans manually meanwhile).
 8. **Receive/make phone calls** — Phase 6.
 

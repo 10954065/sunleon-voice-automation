@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 type ConversationRow = {
@@ -38,7 +40,17 @@ function durationLabel(row: ConversationRow): string {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-export function VoiceActivity({ conversations, leads }: { conversations: ConversationRow[]; leads: LeadRow[] }) {
+export function VoiceActivity({
+  orgSlug,
+  agentId,
+  conversations,
+  leads,
+}: {
+  orgSlug: string;
+  agentId: string;
+  conversations: ConversationRow[];
+  leads: LeadRow[];
+}) {
   return (
     <>
       <Card>
@@ -72,6 +84,12 @@ export function VoiceActivity({ conversations, leads }: { conversations: Convers
               ))}
             </ul>
           )}
+          <Link
+            href={`/dashboard/${orgSlug}/conversations?agent=${agentId}`}
+            className="mt-3 inline-block text-sm font-medium text-amber-700 hover:text-amber-800"
+          >
+            Full conversation history →
+          </Link>
         </CardContent>
       </Card>
 
@@ -95,6 +113,12 @@ export function VoiceActivity({ conversations, leads }: { conversations: Convers
               ))}
             </ul>
           )}
+          <Link
+            href={`/dashboard/${orgSlug}/leads?agent=${agentId}`}
+            className="mt-3 inline-block text-sm font-medium text-amber-700 hover:text-amber-800"
+          >
+            All leads →
+          </Link>
         </CardContent>
       </Card>
     </>

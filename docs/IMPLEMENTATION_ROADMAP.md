@@ -9,7 +9,7 @@ Status values: `NOT STARTED`, `IN PROGRESS`, `BLOCKED`, `VERIFIED`. This table i
 | 2 | Agent Studio, knowledge ingestion, embeddings, tenant-scoped retrieval | BLOCKED (live embeddings need `AI_GATEWAY_API_KEY`) — see `docs/PHASE_STATUS.md` |
 | 3 | Real-time voice MVP, embeddable widget | BLOCKED (built and tested up to the provider; live conversation needs `AI_GATEWAY_API_KEY`) — see `docs/PHASE_STATUS.md` |
 | 4 | Usage metering, plans, billing, Paystack webhooks | BLOCKED (metering, limits and admin built and verified; live payments need `PAYSTACK_SECRET_KEY`) — see `docs/PHASE_STATUS.md` |
-| 5 | Analytics, leads, admin console, audit history | NOT STARTED |
+| 5 | Analytics, history, transcripts, leads, exports, retention, audit, admin console, monitoring | VERIFIED (AI summaries need `AI_GATEWAY_API_KEY`) — see `docs/PHASE_STATUS.md` |
 | 6 | Telephony | NOT STARTED |
 | 7 | Advanced voice, validated local languages, integrations | NOT STARTED |
 | 8 | Production hardening | NOT STARTED |

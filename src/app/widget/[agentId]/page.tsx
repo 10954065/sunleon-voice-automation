@@ -50,6 +50,9 @@ export default async function WidgetPage({ params }: { params: Promise<{ agentId
         leadCaptureEnabled={agent.publishedVersion.leadCaptureEnabled}
         prepareUrl={`/api/voice/sessions/embed/${agent.id}`}
         prepareBody={{ ticket }}
+        transcriptPolicy={
+          agent.organization.storeTranscripts ? { retentionDays: agent.organization.transcriptRetentionDays } : null
+        }
       />
     </main>
   );

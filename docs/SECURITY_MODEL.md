@@ -2,7 +2,7 @@
 
 ## Status
 
-Describes controls implemented through Phase 4, and flags what is explicitly deferred (with the phase that will add it).
+Describes controls implemented through Phase 5, and flags what is explicitly deferred (with the phase that will add it).
 
 ## Authentication
 
@@ -32,7 +32,8 @@ Describes controls implemented through Phase 4, and flags what is explicitly def
 
 ## Audit logging
 
-- `AuditLog` table records: organization creation, membership invites/role changes, login success/failure. Metadata never includes secrets or full request bodies.
+- `AuditLog` table records: organization creation, membership invites/role changes, login success/failure, agent and billing changes, and (Phase 5) data settings, transcript and lead deletions, contact erasure, exports and automatic retention deletions. Metadata never includes secrets or full request bodies, and erasure entries record counts only so the log doesn't keep the data being erased.
+- Owners and admins see their organization's log (`/dashboard/[orgSlug]/audit`); platform admins see every organization's (`/admin/audit`). The app has no way to edit or delete entries.
 
 ## Rate limiting
 
@@ -50,8 +51,24 @@ Describes controls implemented through Phase 4, and flags what is explicitly def
 - **Data minimisation.** Webhook records keep a summary (references, codes, outcome) — never card details or authorization codes. The Paystack `email_token` is stored because cancellation requires it; it isn't a payment credential.
 - **Roles.** Checkout and payment confirmation: OWNER/ADMIN. Cancellation and overage budget: OWNER. All billing changes are audit-logged.
 - **Platform admin.** `User.isPlatformAdmin` is checked against the database on every request (not the session token), has no grant UI, and non-admins get a 404 for `/admin/*`. Plan edits, cost rates and manual assignments are audit-logged; trial plans can't be made public or linked to Paystack; manual assignment is refused while a Paystack subscription is renewing.
-- **Cron.** `/api/cron/sweep-sessions` requires `Authorization: Bearer $CRON_SECRET` (constant-time compare); it answers 503 when unset.
+- **Cron.** `/api/cron/sweep-sessions` and (Phase 5) `/api/cron/retention` require `Authorization: Bearer $CRON_SECRET` (constant-time compare, shared helper `src/server/auth/cron.ts`); they answer 503 when unset.
 - **Database guards.** CHECK constraints keep usage quantities, budgets, reservations and plan limits non-negative.
+
+## Conversation data, privacy and monitoring (Phase 5)
+
+- **Transcripts are opt-in twice.** The owner turns storage on, then each visitor ticks an unticked box before the call. The server records consent when the session is prepared and re-checks it (and the owner's setting) when the transcript arrives. It also requires a connected session and arrival within 10 minutes of the end. Transcripts are write-once, schema-validated, size-limited (128 KB request, 200 entries of 2,000 characters), and a malformed one never stops the session from ending.
+- **Retention and deletion.** Per-organization windows are enforced daily (and by CHECK constraints on the settings). Owners and admins can delete a transcript or a lead. Owners can delete all transcripts (typed confirmation). Owners and admins can erase a person by email or phone, scoped to their organization, with LIKE wildcards treated literally.
+- **Roles.**
+  - Analysts: read-only.
+  - Lead status and summaries: Agent Manager and above.
+  - Transcript and lead deletion, erasure, lead export and the audit log: Owner/Admin.
+  - Data settings and delete-all: Owner.
+  - Every rule is enforced in the server action or route, not just hidden in the UI.
+- **Tenant scoping.** History, detail, analytics, exports, leads and audit queries all filter by the membership's `organizationId`. Pagination cursors are positions only; a cursor from another organization reveals nothing (tested). Export URLs answer 404 to non-members.
+- **Exports.** Conversation CSVs carry metadata only. Lead CSVs (visitors' contact details) are Owner/Admin only. Cells that a spreadsheet would run as formulas are prefixed with an apostrophe. Every export is audit-logged.
+- **Summaries.** The transcript goes to the model as delimited data with an instruction to ignore instructions inside it. The output is rendered as plain text and labelled AI-generated. Requests are rate-limited per organization.
+- **Error reporting.** `onRequestError` records the route pattern, never the request path, headers or cookies. Messages and stacks are scrubbed of emails, phone numbers, bearer tokens, API keys and credentialed URLs before they are logged or stored. Visitors see only a generic page with a digest.
+- **Platform console.** It shows counts and configuration presence (never secret values or customer content). `/api/health` reports only up or down.
 
 ## Transport / storage encryption
 
