@@ -264,7 +264,7 @@ Metering, plans, entitlements, limits, warnings, cost estimates and the admin co
 - `npm run test:coverage`: **246 tests in 31 files, all passing.** Statements **83.89%** (above the 80% target for the first time); `src/server/billing` ~89%.
 - `npm run build`: succeeds; `/dashboard/[orgSlug]/billing`, `/admin/billing`, `/api/webhooks/paystack` and `/api/cron/sweep-sessions` present.
 - Migrations: `20261022131745_phase4_billing` (spurious `DROP INDEX` removed; adds CHECK constraints so usage, budgets and limits can't go negative; seeds the three plans) and `20261022140000_phase4_subscription_billing_anchor` (hand-written column renames). Applied with `migrate deploy`; `migrate diff` shows only the known pgvector-index false positive.
-- CI on GitHub: first green run 39783255519 (just before Phase 4). Check the Actions tab for the Phase 4 commit's run.
+- CI on GitHub: first green run 39783255519 (just before Phase 4); the Phase 4 commit `e9ad0ed` passed in run 39826613181.
 
 ### Manual verification (real browser, via Playwright, no Paystack key)
 
@@ -345,6 +345,7 @@ Everything in the Phase 5 brief is built, tested against real Postgres and check
 - `npm run test:coverage`: **319 tests in 38 files, all passing.** Statements **85.66%**. New modules: `server/analytics` 97%, `server/privacy` 100%, `server/exports` 96%, `server/conversations` 89%.
 - `npm run build`: succeeds; all new pages and routes present.
 - Migration `20261022220935_phase5_analytics_privacy`: spurious `DROP INDEX` removed; adds CHECK constraints and the outcome backfill. Applied with `migrate deploy`.
+- CI on GitHub: run 39924507852 for commit `3dabe16` — migrations, lint, typecheck, tests and build all green. (Phase 4's commit `e9ad0ed` was green too: run 39826613181.)
 
 ### Manual verification (real browser, no AI or Paystack keys)
 
