@@ -529,6 +529,7 @@ Everything in the Phase 6 brief is built, tested against real Postgres with sign
   - `tests/unit/telephony-adapters.test.ts` (8)
 - Seven existing assertions were updated for intended changes: new zero-valued fields on erasure and retention results, the PHONE channel, and one test that used "PHONE" as its example of an invalid channel.
 - `npm run build`: succeeds; the new routes `/api/telephony/twilio/[event]`, `/api/telephony/openai`, `/api/cron/reconcile-telephony`, `/dashboard/[orgSlug]/phone` and `/admin/telephony` are present.
+- CI: run 40071726798 for commit `19c28dd` passed every step (migrations, lint, typecheck, tests against pgvector Postgres, build).
 - Migration `20261023084127_phase6_telephony`: spurious `DROP INDEX` removed; adds E.164 CHECK constraints on every stored phone number and non-negative duration checks. Applied with `migrate deploy`.
 
 ### Manual verification (production build on localhost, test-only credentials)
