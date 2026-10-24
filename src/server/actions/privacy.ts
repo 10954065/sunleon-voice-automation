@@ -126,11 +126,16 @@ export async function eraseContact(organizationSlug: string, formData: FormData)
         matchedBy: [parsed.data.email ? "email" : null, parsed.data.phone ? "phone" : null].filter(Boolean),
         leadsDeleted: result.leadsDeleted,
         transcriptsDeleted: result.transcriptsDeleted,
+        callNumbersCleared: result.callNumbersCleared,
       },
     },
   });
+  const calls =
+    result.callNumbersCleared > 0
+      ? ` Removed the number from ${result.callNumbersCleared} call record${result.callNumbersCleared === 1 ? "" : "s"}.`
+      : "";
   return {
     ok: true,
-    message: `Deleted ${result.leadsDeleted} lead${result.leadsDeleted === 1 ? "" : "s"} and ${result.transcriptsDeleted} transcript${result.transcriptsDeleted === 1 ? "" : "s"}.`,
+    message: `Deleted ${result.leadsDeleted} lead${result.leadsDeleted === 1 ? "" : "s"} and ${result.transcriptsDeleted} transcript${result.transcriptsDeleted === 1 ? "" : "s"}.${calls}`,
   };
 }

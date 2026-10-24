@@ -4,9 +4,8 @@ import { prisma } from "@/server/db/client";
 import { requirePlatformAdmin } from "@/server/auth/platform-admin";
 import { TenantAccessError } from "@/server/auth/tenant";
 import { getCostReport } from "@/server/billing/report";
-import { VOICE_PROVIDER_ID } from "@/server/billing/usage";
+import { COST_RATE_KEYS, type CostRateKeyId } from "@/server/billing/costRates";
 import { isPaymentConfigured } from "@/server/billing/paystack";
-import { REALTIME_VOICE_MODEL } from "@/lib/voice";
 import { formatMicros, formatMinutes, formatMoney, minorToMajorString } from "@/lib/billing";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AssignPlanForm, CostRateForm, PlanForm } from "./admin-forms";
@@ -30,13 +29,15 @@ export default async function AdminBillingPage() {
     throw error;
   }
 
-  const [plans, costRate, report, events, rejected] = await Promise.all([
+  const rateIds = Object.keys(COST_RATE_KEYS) as CostRateKeyId[];
+  const [plans, costRates, report, events, rejected] = await Promise.all([
     prisma.plan.findMany({ orderBy: [{ isTrial: "desc" }, { priceMinor: "asc" }] }),
-    prisma.providerCostRate.findUnique({
-      where: {
-        metric_provider_model: { metric: "VOICE_SECONDS", provider: VOICE_PROVIDER_ID, model: REALTIME_VOICE_MODEL },
-      },
-    }),
+    Promise.all(
+      rateIds.map((id) => {
+        const { metric, provider, model } = COST_RATE_KEYS[id];
+        return prisma.providerCostRate.findUnique({ where: { metric_provider_model: { metric, provider, model } } });
+      })
+    ),
     getCostReport(),
     prisma.paymentWebhookEvent.findMany({ orderBy: { receivedAt: "desc" }, take: RECENT_EVENT_LIMIT }),
     prisma.billingTransaction.findMany({
@@ -70,19 +71,34 @@ export default async function AdminBillingPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Voice cost rate</CardTitle>
+          <CardTitle>Provider cost rates</CardTitle>
           <CardDescription>
-            {costRate
-              ? `Currently ${formatMicros(costRate.microsPerUnit * 60, "GHS")} per minute for ${REALTIME_VOICE_MODEL} — source: ${costRate.note}.`
-              : "No rate is set, so usage is recorded without a cost estimate and margins can't be computed. Enter a rate measured from real provider charges."}
+            One rate per usage stream. A stream with no rate is recorded without a cost estimate, so margins
+            can&apos;t be computed for it. Enter rates measured from real provider charges.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <CostRateForm
-            current={
-              costRate ? { ghsPerMinute: ((costRate.microsPerUnit * 60) / 1_000_000).toFixed(4), note: costRate.note } : null
-            }
-          />
+        <CardContent className="space-y-6">
+          {rateIds.map((id, index) => {
+            const costRate = costRates[index];
+            return (
+              <div key={id} className="space-y-2">
+                <p className="text-sm font-medium text-stone-900">{COST_RATE_KEYS[id].label}</p>
+                <p className="text-xs text-stone-500">
+                  {costRate
+                    ? `Currently ${formatMicros(costRate.microsPerUnit * 60, "GHS")} per minute — source: ${costRate.note}.`
+                    : "No rate set."}
+                </p>
+                <CostRateForm
+                  rate={id}
+                  current={
+                    costRate
+                      ? { ghsPerMinute: ((costRate.microsPerUnit * 60) / 1_000_000).toFixed(4), note: costRate.note }
+                      : null
+                  }
+                />
+              </div>
+            );
+          })}
         </CardContent>
       </Card>
 

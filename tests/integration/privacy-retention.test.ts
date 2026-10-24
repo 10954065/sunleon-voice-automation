@@ -164,7 +164,7 @@ describe("contact erasure", () => {
       phone: "0241234567",
     });
 
-    expect(result).toEqual({ leadsDeleted: 2, transcriptsDeleted: 2 });
+    expect(result).toEqual({ leadsDeleted: 2, transcriptsDeleted: 2, callNumbersCleared: 0 });
     expect((await prisma.lead.findMany({ select: { id: true } })).map((row) => row.id).sort()).toEqual(
       [otherPerson.id, otherTenant.id].sort()
     );
@@ -181,7 +181,7 @@ describe("contact erasure", () => {
 
     const result = await eraseContactData({ organizationId: seed.organization.id, email: "%@example.com" });
 
-    expect(result).toEqual({ leadsDeleted: 0, transcriptsDeleted: 0 });
+    expect(result).toEqual({ leadsDeleted: 0, transcriptsDeleted: 0, callNumbersCleared: 0 });
     expect(await prisma.conversationTranscript.count()).toBe(1);
   });
 
@@ -192,6 +192,7 @@ describe("contact erasure", () => {
     expect(await eraseContactData({ organizationId: seed.organization.id, phone: "12345" })).toEqual({
       leadsDeleted: 0,
       transcriptsDeleted: 0,
+      callNumbersCleared: 0,
     });
     expect(await prisma.lead.count()).toBe(1);
   });

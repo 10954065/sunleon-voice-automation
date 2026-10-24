@@ -2,7 +2,7 @@
 
 ## Status
 
-Describes the test setup actually in place through Phase 5. Coverage numbers in phase reports are real `vitest` output, never estimated or fabricated.
+Describes the test setup actually in place through Phase 6. Coverage numbers in phase reports are real `vitest` output, never estimated or fabricated.
 
 ## Test levels
 
@@ -106,6 +106,46 @@ Phase 5 (`tests/integration/conversation-records.test.ts`, `analytics.test.ts`, 
   - History pagination has no gaps or duplicates, filters work, and a foreign cursor reveals nothing.
   - Detail, leads and audit queries are organization-scoped.
 - **Pure helpers:** the outcome precedence, transcript trimming and byte fitting, CSV quoting, the scrubber, fingerprints, URL filter parsing (invalid values ignored), the UTC day range, and the privacy form schemas.
+
+Phase 6 (`tests/integration/telephony-calls.test.ts`, `telephony-outbound.test.ts`, `tests/unit/telephony.test.ts`, `telephony-adapters.test.ts`). Requests are signed exactly as each provider documents (Twilio HMAC-SHA1 over the URL and sorted fields; OpenAI Standard Webhooks HMAC-SHA256), and the two provider APIs are replaced by test doubles. These tests are not evidence that a live call works.
+- **Signatures:**
+  - Twilio's own published example passes.
+  - Forged, tampered, foreign-host and foreign-account requests get 403 before any write.
+  - Bad OpenAI signatures get 400.
+  - Missing configuration gets 503.
+- **Inbound end to end:** disclosure TwiML with the reservation as `timeLimit` → accept with server-side instructions and tools → sideband scheduled → `DialCallDuration` billed as `provider_reported` and capped at the reservation → carrier seconds recorded as `TELEPHONY_SECONDS`.
+- **Idempotency:**
+  - Retried voice webhook, redelivered and second OpenAI events, repeated Dial action, duplicate and late status callbacks, a repeated transfer request.
+  - Each produces one conversation, one accept, one ledger row per metric, and no status regression.
+- **Failure recovery:**
+  - No plan → the transfer line. Unknown number → "not in service". AI not configured → an apology.
+  - AI leg failure → FAILED, unbilled, fallback. Accept refused → FAILED with the error scrubbed.
+  - Mismatched CallSid → ignored. Lost Dial action → settled by the status callback.
+- **Tools and transfer:**
+  - Transfer redirects once, settles TRANSFERRED, and records MISSED; a failed redirect rolls back.
+  - Contact capture uses the caller's number only when asked, and email and phone are validated.
+  - Opt-out is recorded; search, end call and unknown tools behave; a late lead keeps TRANSFERRED.
+  - The sideband loop greets, answers tools, hangs up, closes after transfer, and reports a failing tool to the model.
+- **Outbound:**
+  - Carrier call parameters and audit entries (masked).
+  - Lead basis versus confirmation.
+  - Refusals: hours, country, invalid number, outbound off, no agent, own number, do-not-call (nothing left behind), cooldown, hourly limit, carrier failure (reservation freed), no configuration or plan.
+  - Keypad 9 opt-out, an answer arriving before the CallSid was stored, answering machines, unanswered calls.
+- **Actions and privacy:**
+  - Owner/Admin-only number settings, cross-tenant refusal, unpublished agent refused.
+  - Agent Manager+ call-back; analysts refused.
+  - Do-not-call add (any manager) and remove (Owner with confirmation).
+  - Platform-admin-only number registry.
+  - Erasure clears the caller number but keeps the opt-out; retention clears old numbers and prunes webhook logs.
+  - The Phone page data is tenant-scoped and masked.
+- **Reconciliation:** a lost callback is recovered from Twilio's record, prices are stored, mismatches reported (not overwritten), re-runs are idempotent, fetch failures are counted, the report aggregates, and the cron route is protected and skips without Twilio.
+- **Adapter contracts:** with the SDKs mocked, the exact `calls.create`, `update`, `fetch`, `accept`, `reject(603)`, `hangup`, `webhooks.unwrap` and sideband socket calls.
+
+Verified over real HTTP and in a real browser in Phase 6, against a production build with test-only credentials (details in `docs/PHASE_STATUS.md`):
+- a signed inbound call through every webhook, including a real accept request refused by OpenAI for the test key, and the fallback
+- number registration and settings
+- the outside-hours refusal
+- the do-not-call list, the conversation phone panel, and the monitoring indicators
 
 Verified manually in a real browser (Playwright) in Phase 5, with sample sessions inserted by SQL because live voice is BLOCKED (details in `docs/PHASE_STATUS.md`):
 - the analytics figures, the outcome filter, the conversation detail page with its transcript and the summary BLOCKED notice

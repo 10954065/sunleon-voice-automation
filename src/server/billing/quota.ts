@@ -45,7 +45,9 @@ export async function lockOrganization(tx: Prisma.TransactionClient, organizatio
 export async function reserveVoiceSeconds(
   tx: Prisma.TransactionClient,
   organizationId: string,
-  now: Date
+  now: Date,
+  /** A lower per-session cap for this channel (phone calls). */
+  maxSeconds: number = MAX_SESSION_SECONDS
 ): Promise<number> {
   await lockOrganization(tx, organizationId);
 
@@ -69,5 +71,5 @@ export async function reserveVoiceSeconds(
     throw new QuotaExceededError("allowance_exhausted");
   }
 
-  return Math.min(MAX_SESSION_SECONDS, remaining);
+  return Math.min(MAX_SESSION_SECONDS, maxSeconds, remaining);
 }

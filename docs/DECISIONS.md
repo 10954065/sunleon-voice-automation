@@ -177,3 +177,37 @@ Append-only log of significant decisions. Each entry: date, decision, context, a
 ## 2026-10-23 — In-house error reporting until there is an error-tracking account
 
 **Decision:** `src/instrumentation.ts` (`onRequestError`) and the cron jobs call `reportError`. It writes a scrubbed JSON log line (for the host's log drain) and a grouped `ErrorReport` row shown on `/admin/monitoring`. No third-party tracker is added without an account and a data-processing review; `reportError` is the single place to forward errors to one later.
+
+## 2026-10-23 — Phone calls: Twilio carries the call, OpenAI Realtime SIP runs the AI
+
+**Decision:** Twilio Programmable Voice owns numbers, webhooks, time limits and transfers, and its TwiML dials the OpenAI Realtime SIP endpoint. Our server only handles HTTP webhooks and a sideband control socket; no audio passes through it.
+**Why:**
+- Bridging Twilio Media Streams to a realtime model needs a long-running media server, which serverless hosting doesn't give.
+- OpenAI's SIP endpoint plus its `realtime.call.incoming` webhook gives server-side accept with instructions (so they never reach a caller's device) and a documented refer/hangup API.
+- Twilio, rather than OpenAI, is the source of call progress and durations, which reconciliation needs; OpenAI sends no call-ended webhook.
+**Trade-off:** a second AI credential (direct OpenAI), because the AI Gateway has no SIP endpoint. Africa's Talking was considered for Ghana but has no documented realtime audio or SIP path into the model.
+
+## 2026-10-23 — The SIP leg is matched by a single-use conversation claim
+
+**Decision:** Twilio adds `X-Sunleon-Conversation: <uuid>` to the SIP INVITE. The OpenAI webhook accepts a call only when that id names an active PHONE conversation with no AI leg yet, set up within 2 minutes; the claim is atomic. Everything else is declined with SIP 603.
+**Why:** anyone can send an INVITE to the project's SIP address, and OpenAI calls header values untrusted. An unguessable, single-use, time-boxed reference means only calls we set up can be answered (and billed).
+
+## 2026-10-23 — Phone AI time is billed on Twilio's measurement of the AI leg
+
+**Decision:** `VOICE_SECONDS` for a phone call is Twilio's `DialCallDuration` for the SIP leg, capped at the reservation. If that's missing, our clock from the accept; if both callbacks are lost, the sweeper's reservation. The whole call's carrier seconds go into a separate `TELEPHONY_SECONDS` metric that is platform cost only.
+**Why:** it's the provider's own figure for what the AI was connected for, so customers aren't billed for the disclosure, ringing, a transfer or an opt-out. Separating the carrier metric keeps the plan allowance about AI minutes while margins still include Twilio's cost.
+
+## 2026-10-23 — Outbound calls only to people who asked, one at a time
+
+**Decision:** staff (Agent Manager+) can place one AI call at a time to a lead's own number, or to a number they confirm asked for a call (audit-logged). Do-not-call, Ghana-only destinations by default, 08:00–20:00 Ghana time, 20 an hour, a 10-minute per-number cooldown and a keypad opt-out before the AI speaks are enforced on the server. No list or campaign dialling.
+**Why:** unsolicited automated calls harm people and the business's reputation, and international premium-rate fraud is a real cost. The brief asks for "authorized outbound calling"; these rules make authorization concrete and checkable.
+
+## 2026-10-23 — Phone sessions fit inside one serverless invocation (for now)
+
+**Decision:** the sideband socket runs in `after()` within the OpenAI webhook's function (`maxDuration = 300`), so phone calls are capped at 270 seconds, enforced by Twilio's Dial `timeLimit`. Pro deployments can raise both.
+**Why:** it works on every Vercel plan without a separate worker. A long-running worker would lift the cap and is the path if 4½ minutes proves too short.
+
+## 2026-10-23 — The do-not-call list outlives erasure
+
+**Decision:** erasure and retention remove a caller's number from call records and leads but keep `CallOptOut` entries; only the Owner can remove one, with a typed confirmation.
+**Why:** deleting the suppression entry when someone asks to be forgotten would let the business call them again: the opposite of what they asked for.

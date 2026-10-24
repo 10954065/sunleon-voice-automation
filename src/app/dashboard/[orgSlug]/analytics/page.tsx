@@ -182,7 +182,7 @@ export default async function AnalyticsPage({
           <CardHeader>
             <CardTitle>By channel and agent</CardTitle>
             <CardDescription>
-              Website {report.channels.EMBED} · Dashboard tests {report.channels.TEST}
+              Website {report.channels.EMBED} · Phone {report.channels.PHONE} · Dashboard tests {report.channels.TEST}
             </CardDescription>
           </CardHeader>
           <CardContent>

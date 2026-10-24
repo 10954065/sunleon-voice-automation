@@ -25,13 +25,17 @@ function escapeLike(value: string): string {
 export interface ErasureResult {
   leadsDeleted: number;
   transcriptsDeleted: number;
+  /** Phone call records whose caller number was removed (the call record itself stays, for billing). */
+  callNumbersCleared: number;
 }
 
 /**
  * Erases one person's contact data from an organization (a data-subject deletion request): leads whose
  * email or phone matches, and the stored transcripts of those leads' conversations or of any conversation
  * whose transcript contains the email address. Conversation records themselves hold no contact details
- * and stay, so analytics remain accurate. Everything is scoped to organizationId.
+ * and stay, so analytics remain accurate; phone call records keep their timing but lose the number.
+ * The do-not-call list is deliberately kept: erasing it would let the business call the person again.
+ * Everything is scoped to organizationId.
  */
 export async function eraseContactData(params: {
   organizationId: string;
@@ -41,7 +45,7 @@ export async function eraseContactData(params: {
   const email = params.email?.trim().toLowerCase() || null;
   const phoneDigits = params.phone ? normalizePhoneDigits(params.phone) : null;
   if (!email && !phoneDigits) {
-    return { leadsDeleted: 0, transcriptsDeleted: 0 };
+    return { leadsDeleted: 0, transcriptsDeleted: 0, callNumbersCleared: 0 };
   }
 
   return prisma.$transaction(async (tx) => {
@@ -79,6 +83,13 @@ export async function eraseContactData(params: {
     const deletedLeads = await tx.lead.deleteMany({
       where: { organizationId: params.organizationId, id: { in: leadIds } },
     });
-    return { leadsDeleted: deletedLeads.count, transcriptsDeleted: transcripts.count };
+    const callNumbersCleared = phoneDigits
+      ? await tx.$executeRaw`
+          UPDATE "PhoneCall" SET "remoteNumber" = NULL, "updatedAt" = now()
+          WHERE "organizationId" = ${params.organizationId}
+            AND "remoteNumber" IS NOT NULL
+            AND right(regexp_replace("remoteNumber", '\D', '', 'g'), ${phoneDigits.length}) = ${phoneDigits}`
+      : 0;
+    return { leadsDeleted: deletedLeads.count, transcriptsDeleted: transcripts.count, callNumbersCleared };
   });
 }

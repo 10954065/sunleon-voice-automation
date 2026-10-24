@@ -44,5 +44,6 @@ export const RANGE_OPTIONS = [
 export const CHANNEL_OPTIONS = [
   { value: "", label: "All channels" },
   { value: "EMBED", label: "Website" },
+  { value: "PHONE", label: "Phone" },
   { value: "TEST", label: "Dashboard tests" },
 ];

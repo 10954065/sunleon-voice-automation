@@ -184,6 +184,38 @@ Server errors grouped by `fingerprint` (unique SHA-256 of source, route pattern 
 ### `JobRun`
 One row per scheduled-job run: `job`, `status` (`SUCCEEDED` / `FAILED`), `startedAt`, `finishedAt`, `details` (the job's counts) or `error`. Pruned after 90 days.
 
-## Phase 6+ (not implemented)
+## Phase 6 schema (implemented)
 
-- Telephony call records and provider events.
+Migration `20261023084127_phase6_telephony`. CHECK constraints keep every stored phone number in E.164 (`^\+[1-9][0-9]{6,14}$`) and call durations non-negative.
+
+New enum values:
+- `ConversationChannel.PHONE`
+- `ConversationOutcome.TRANSFERRED` (precedence: FAILED > NOT_CONNECTED > TRANSFERRED > LEAD_CAPTURED > …)
+- `UsageMetric.TELEPHONY_SECONDS`, carrier seconds: platform cost, never counted against the allowance.
+
+### `PhoneNumber`
+A carrier number registered by a platform admin and assigned to one organization.
+- Identity: `e164` (unique), optional `providerNumberSid` (unique).
+- Settings: `agentId` (the agent that answers; `SET NULL` if the agent is deleted), `label`, `inboundEnabled`, `outboundEnabled`, and `transferNumber` (the human line for transfers and fallback).
+
+### `PhoneCall`
+The carrier side of a PHONE conversation, one to one with `Conversation`.
+- Call: `direction` (INBOUND or OUTBOUND), `remoteNumber` (personal data: erasable, cleared after the lead retention window), `providerCallSid` (unique) and `realtimeCallId` (unique, set once).
+- Progress: `providerStatus` (only moves forward), `answeredBy`.
+- Durations from Twilio: `aiLegSeconds` (DialCallDuration) and `carrierSeconds` (CallDuration).
+- Reconciliation: `carrierPriceMicros`, `carrierPriceUnit`, `reconciledAt`.
+- Handoff and errors: `transferStatus` (REQUESTED, CONNECTED or MISSED), `transferRequestedAt`, `failureReason`.
+- Outbound: `requestedByUserId`.
+- Indexed by `(organizationId, createdAt)` and `(organizationId, remoteNumber)`.
+
+### `CallOptOut`
+The do-not-call list: `(organizationId, phoneNumber)` unique, `source` (CALLER_KEYPAD, CALLER_REQUEST or STAFF), `createdByUserId`. Deliberately exempt from erasure and retention.
+
+### `TelephonyWebhookEvent`
+One row per handled provider webhook: `source` (TWILIO or OPENAI) and `eventKey` (unique together; the Twilio call SID plus callback kind and sequence, or OpenAI's `webhook-id`), `eventType`, `status` (PROCESSED or IGNORED), `organizationId`, `note`. Used to short-circuit redeliveries and as an audit trail. Pruned after 90 days.
+
+Ledger rows for phone calls: `VOICE_SECONDS` with provider `openai-realtime-sip` (key `voice-session:<id>`) and `TELEPHONY_SECONDS` with provider `twilio`, model `pstn-inbound`/`pstn-outbound` (key `telephony:<id>`). See `docs/USAGE_RECONCILIATION.md`.
+
+## Phase 7+ (not implemented)
+
+- Custom voices, validated local languages, third-party integrations.

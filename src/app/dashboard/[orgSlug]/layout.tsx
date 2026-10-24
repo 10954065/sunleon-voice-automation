@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { href: "/analytics", label: "Analytics" },
   { href: "/conversations", label: "Conversations" },
   { href: "/leads", label: "Leads" },
+  { href: "/phone", label: "Phone" },
   { href: "/agents", label: "Agents" },
   { href: "/members", label: "Members" },
   { href: "/billing", label: "Billing" },

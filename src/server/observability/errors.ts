@@ -18,6 +18,8 @@ export function scrubSensitiveText(text: string): string {
   return text
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
     .replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]+/g, "[redacted-key]")
+    // OpenAI keys (sk-…, sk-proj-…), including the masked form OpenAI echoes back in 401 errors.
+    .replace(/\bsk-[A-Za-z0-9_*-]{6,}/g, "[redacted-key]")
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]+@[^\s'"]+/gi, "[redacted-url]")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
     .replace(/\+?\d[\d\s-]{7,}\d/g, "[number]");

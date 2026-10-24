@@ -1,10 +1,12 @@
 import Link from "next/link";
 
+import { channelLabel } from "@/lib/format";
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 type ConversationRow = {
   id: string;
-  channel: "TEST" | "EMBED";
+  channel: "TEST" | "EMBED" | "PHONE";
   status: "ACTIVE" | "COMPLETED" | "FAILED";
   originDomain: string | null;
   startedAt: string;
@@ -69,7 +71,7 @@ export function VoiceActivity({
                 <li key={row.id} className="flex flex-wrap items-start justify-between gap-2 py-3 text-sm">
                   <div className="space-y-0.5">
                     <p className="text-stone-900">
-                      {row.channel === "TEST" ? "Dashboard test" : `Website · ${row.originDomain ?? "unknown site"}`}
+                      {channelLabel(row.channel, row.originDomain)}
                     </p>
                     <p className="text-xs text-stone-500">
                       {formatDate(row.startedAt)} · {durationLabel(row)}

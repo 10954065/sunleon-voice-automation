@@ -10,12 +10,14 @@ export const OUTCOME_LABELS: Record<ConversationOutcome, string> = {
   SHORT: "Short (under 15s)",
   ENGAGED: "Conversation",
   LEAD_CAPTURED: "Lead captured",
+  TRANSFERRED: "Transferred to a person",
 };
 
 /**
  * Classifies a finished conversation from recorded facts only — no model guesses. The order is
  * the precedence: a failure or a session that never connected outranks everything, and a
- * captured lead outranks how long the call was. The phase5 migration backfills with the same rules.
+ * handoff to a person outranks a captured lead,
+ * which outranks how long the call was. The phase5 migration backfills with the same rules.
  */
 export function classifyOutcome(facts: {
   failed: boolean;
@@ -23,12 +25,17 @@ export function classifyOutcome(facts: {
   leadCount: number;
   abandoned: boolean;
   chargedSeconds: number;
+  /** Phone only: the AI handed the caller to a human. */
+  transferred?: boolean;
 }): ConversationOutcome {
   if (facts.failed) {
     return "FAILED";
   }
   if (!facts.connected) {
     return "NOT_CONNECTED";
+  }
+  if (facts.transferred) {
+    return "TRANSFERRED";
   }
   if (facts.leadCount > 0) {
     return "LEAD_CAPTURED";

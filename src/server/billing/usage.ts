@@ -4,7 +4,7 @@ import { prisma } from "@/server/db/client";
 import { MAX_SESSION_SECONDS, REALTIME_VOICE_MODEL } from "@/lib/voice";
 import { resolveEntitlements, type Db, type Entitlements } from "./entitlements";
 import { classifyOutcome } from "@/server/conversations/outcome";
-import type { Conversation, Prisma } from "@/generated/prisma/client";
+import type { Conversation, Prisma, UsageMetric } from "@/generated/prisma/client";
 
 export const VOICE_PROVIDER_ID = "vercel-ai-gateway";
 /** Matches the token route's window: a prepared session nobody started stops holding allowance after this. */
@@ -14,7 +14,11 @@ export const STALE_GRACE_SECONDS = 2 * 60;
 /** Ceiling for a single ledger row's cost snapshot (the column is a 32-bit integer). */
 const MAX_COST_MICROS = 2_000_000_000;
 
-export type UsageSource = "server_clock" | "sweeper_reservation";
+/**
+ * "server_clock": our own start-to-end measurement. "provider_reported": the carrier's measurement
+ * of the AI leg (Twilio DialCallDuration). "sweeper_reservation": abandoned, charged its reservation.
+ */
+export type UsageSource = "server_clock" | "provider_reported" | "sweeper_reservation";
 
 type ConversationTiming = Pick<Conversation, "status" | "startedAt" | "tokenIssuedAt" | "reservedSeconds">;
 
@@ -52,12 +56,16 @@ export async function getLiveSessions(
   return { count: live.length, reservedSeconds: live.reduce((sum, c) => sum + c.reservedSeconds, 0) };
 }
 
-async function estimateCostMicros(db: Db, seconds: number): Promise<number | null> {
-  const rate = await db.providerCostRate.findUnique({
-    where: {
-      metric_provider_model: { metric: "VOICE_SECONDS", provider: VOICE_PROVIDER_ID, model: REALTIME_VOICE_MODEL },
-    },
-  });
+async function estimateCostMicros(
+  db: Db,
+  seconds: number,
+  rateKey: { metric: UsageMetric; provider: string; model: string } = {
+    metric: "VOICE_SECONDS",
+    provider: VOICE_PROVIDER_ID,
+    model: REALTIME_VOICE_MODEL,
+  }
+): Promise<number | null> {
+  const rate = await db.providerCostRate.findUnique({ where: { metric_provider_model: rateKey } });
   if (!rate) {
     return null;
   }
@@ -81,12 +89,19 @@ export async function settleConversation(
     /** What our clock measured, when it differs from what is charged — kept for reconciliation. */
     measuredSeconds?: number;
     clientReportedSeconds?: number;
+    /** The AI leg failed (phone): the conversation ends FAILED instead of COMPLETED. */
+    failed?: boolean;
+    /** Phone: the AI handed the caller to a human. */
+    transferred?: boolean;
+    /** Defaults to the browser path's Gateway model. */
+    provider?: string;
+    model?: string;
   }
 ): Promise<boolean> {
   const { conversation, now } = params;
   const claimed = await tx.conversation.updateMany({
     where: { id: conversation.id, status: "ACTIVE" },
-    data: { status: "COMPLETED", endedAt: now, closeReason: params.reason },
+    data: { status: params.failed ? "FAILED" : "COMPLETED", endedAt: now, closeReason: params.reason },
   });
   if (claimed.count !== 1) {
     return false;
@@ -96,11 +111,12 @@ export async function settleConversation(
   // Counted after the claim: recordLead locks this row before inserting, so a lead either commits
   // before the claim (and is counted here) or waits and then upgrades the outcome itself.
   const outcome = classifyOutcome({
-    failed: false,
+    failed: Boolean(params.failed),
     connected: Boolean(conversation.tokenIssuedAt),
     leadCount: await tx.lead.count({ where: { conversationId: conversation.id } }),
     abandoned: params.source === "sweeper_reservation",
     chargedSeconds,
+    transferred: params.transferred,
   });
   await tx.conversation.update({ where: { id: conversation.id }, data: { outcome } });
 
@@ -134,15 +150,62 @@ export async function settleConversation(
       quantity: chargedSeconds,
       occurredAt: conversation.tokenIssuedAt,
       source: params.source,
-      provider: VOICE_PROVIDER_ID,
-      model: REALTIME_VOICE_MODEL,
-      estimatedCostMicros: await estimateCostMicros(tx, chargedSeconds),
+      provider: params.provider ?? VOICE_PROVIDER_ID,
+      model: params.model ?? REALTIME_VOICE_MODEL,
+      estimatedCostMicros: await estimateCostMicros(tx, chargedSeconds, {
+        metric: "VOICE_SECONDS",
+        provider: params.provider ?? VOICE_PROVIDER_ID,
+        model: params.model ?? REALTIME_VOICE_MODEL,
+      }),
       idempotencyKey: `voice-session:${conversation.id}`,
     },
   });
 
   await raiseUsageAlerts(tx, conversation.organizationId, now);
   return true;
+}
+
+/**
+ * Records a phone call's carrier seconds (Twilio's CallDuration). Platform cost only: quota and
+ * allowance count VOICE_SECONDS, never this metric. Idempotent per conversation.
+ */
+export async function recordCarrierUsage(
+  db: Db,
+  params: {
+    organizationId: string;
+    agentId: string;
+    conversationId: string;
+    seconds: number;
+    occurredAt: Date;
+    provider: string;
+    model: string;
+    source: "provider_reported" | "provider_reconciliation";
+  }
+): Promise<boolean> {
+  const seconds = Math.max(0, Math.round(params.seconds));
+  const created = await db.usageLedgerEntry.createMany({
+    data: [
+      {
+        organizationId: params.organizationId,
+        agentId: params.agentId,
+        conversationId: params.conversationId,
+        metric: "TELEPHONY_SECONDS",
+        quantity: seconds,
+        occurredAt: params.occurredAt,
+        source: params.source,
+        provider: params.provider,
+        model: params.model,
+        estimatedCostMicros: await estimateCostMicros(db, seconds, {
+          metric: "TELEPHONY_SECONDS",
+          provider: params.provider,
+          model: params.model,
+        }),
+        idempotencyKey: `telephony:${params.conversationId}`,
+      },
+    ],
+    skipDuplicates: true,
+  });
+  return created.count === 1;
 }
 
 /** Creates at most one warning and one exhausted alert per organization per billing period. */

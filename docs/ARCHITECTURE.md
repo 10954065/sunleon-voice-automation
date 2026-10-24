@@ -2,7 +2,7 @@
 
 ## Status
 
-This reflects the architecture as implemented through **Phase 4**. Components marked "(planned)" do not exist yet.
+This reflects the architecture as implemented through **Phase 6**. Components marked "(planned)" do not exist yet.
 
 ## High-level shape
 
@@ -61,13 +61,23 @@ The dashboard "Test voice" panel uses the same widget, with step 1 replaced by a
 
 **Analytics and data controls (Phase 5)** sit on the same tables. Settling a session also classifies its outcome from recorded facts; a lead recorded later upgrades it, under a row lock that orders the two. When the owner enables transcripts and the visitor ticks the box, the widget sends its transcript with the end report and `storeTranscript` keeps it once. Summaries are generated on request through the Gateway. History, analytics and exports query `Conversation` joined to `UsageLedgerEntry`, always scoped to the caller's organization. A daily, `CRON_SECRET`-protected `/api/cron/retention` deletes transcripts and leads past each organization's window. Both cron jobs record a `JobRun`. `src/instrumentation.ts` sends every uncaught server error to `reportError` (scrubbed log line plus a grouped `ErrorReport`). `/admin` (organizations, monitoring, audit, billing) reads these for platform admins without exposing customer content.
 
-Still planned, not yet built: a background job runner (async ingestion), Redis (durable rate limiting), S3-compatible storage, email notifications (usage alerts are in-app only), telephony adapters (Phase 6), and a server-side voice relay if instruction confidentiality or server-enforced session caps become requirements.
+Still planned, not yet built: a background job runner (async ingestion), Redis (durable rate limiting), S3-compatible storage, email notifications (usage alerts are in-app only), and a server-side voice relay for the browser widget if instruction confidentiality or server-enforced session caps become requirements.
+
+**Telephony (Phase 6)** adds a second voice path that needs no media server:
+1. Twilio receives the call and posts a signed webhook to `/api/telephony/twilio/voice`.
+2. We reserve allowance and create a PHONE conversation and its `PhoneCall`, then answer with TwiML: the AI disclosure, then `<Dial timeLimit><Sip>` to OpenAI's SIP endpoint carrying the conversation id in a custom header.
+3. OpenAI posts a signed `realtime.call.incoming` to `/api/telephony/openai`. We claim the conversation once and accept the call with server-side instructions and tools.
+4. A sideband WebSocket (in `after()`) runs the tools.
+5. Twilio's Dial action and status callbacks settle the conversation (AI seconds from `DialCallDuration`) and record carrier seconds.
+6. A daily job reconciles against Twilio's call records.
+
+Audio flows only between Twilio and OpenAI. Outbound calls start from a server action that applies the authorization rules, then `calls.create`.
 
 ## Why Next.js App Router
 
 Chosen because (a) the spec prefers it, (b) the target deploy platform is Vercel (Next.js-native), (c) Server Components let tenant-scoped data fetching happen server-side by default, reducing the chance of leaking cross-tenant data to the client. See `docs/DECISIONS.md`.
 
-## Directory layout (Phase 5)
+## Directory layout (Phase 6)
 
 ```
 src/
@@ -78,7 +88,8 @@ src/
       agents/              # Agent Studio, knowledge base, voice test/embed/activity UI
       billing/             # plan, usage, overage budget, checkout, cancel, history (Phase 4)
       analytics/ conversations/ leads/ settings/ audit/   # Phase 5: analytics, history, leads, data & privacy, audit log
-    admin/                 # platform console: organizations, monitoring, audit (Phase 5), billing (Phase 4)
+      phone/               # Phase 6: numbers, call-back, recent calls, do-not-call list
+    admin/                 # platform console: organizations, monitoring, audit (Phase 5), billing (Phase 4), telephony (Phase 6)
     widget/[agentId]/      # public iframe page for embedded voice (Phase 3)
     api/auth/[...nextauth]/ # Auth.js route handler
     api/voice/             # session prepare/token/end, search-knowledge tool, leads (Phase 3)
@@ -87,6 +98,9 @@ src/
     api/cron/retention/    # CRON_SECRET-protected daily retention job (Phase 5)
     api/orgs/[orgSlug]/exports/[kind]/ # CSV exports (Phase 5)
     api/health/            # public up/down check (Phase 5)
+    api/telephony/twilio/[event]/ # signed Twilio webhooks: voice, Dial actions, keypad, status (Phase 6)
+    api/telephony/openai/  # signed OpenAI realtime.call.incoming webhook (Phase 6)
+    api/cron/reconcile-telephony/ # CRON_SECRET-protected daily usage reconciliation (Phase 6)
   server/
     auth/
       config.ts            # Auth.js (NextAuth) setup
@@ -100,6 +114,7 @@ src/
     conversations/          # Phase 5: outcome rules, transcripts, summaries, history queries
     analytics/ leads/ audit/ exports/ privacy/ admin/   # Phase 5: reports, queries, CSV, retention and erasure, platform overview
     observability/          # Phase 5: error reporting, job runs
+    telephony/              # Phase 6: Twilio + OpenAI SIP adapters, TwiML, lifecycle, tools, sideband, outbound, reconciliation
     db/                    # Prisma client singleton
   lib/                     # shared utilities (validation schemas, etc.)
   components/              # UI components (shadcn/ui-based) and voice-widget/ (Phase 3)

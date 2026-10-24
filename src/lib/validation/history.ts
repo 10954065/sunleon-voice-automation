@@ -19,7 +19,7 @@ const rangeParam = z.coerce
   .catch(30)
   .default(30);
 
-const channelParam = z.enum(["TEST", "EMBED"]).optional().catch(undefined);
+const channelParam = z.enum(["TEST", "EMBED", "PHONE"]).optional().catch(undefined);
 
 export const conversationFiltersSchema = z.object({
   days: rangeParam,

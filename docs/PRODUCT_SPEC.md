@@ -31,7 +31,7 @@ This document describes the intended product end-state across all phases. **Stat
 5. **Embed a voice widget on a website** — Phase 3.
 6. **View conversations, usage, leads** — Phase 5: analytics, conversation history with consented transcripts and on-request AI summaries (summaries BLOCKED until `AI_GATEWAY_API_KEY` is set), leads with follow-up status, CSV exports, retention settings and erasure, and an audit log.
 7. **Manage plan, billing, usage limits** — Phase 4: plans, usage, limits, overage budget and history are built; online payment through Paystack is built but BLOCKED until a Paystack account is configured (platform admins can assign plans manually meanwhile).
-8. **Receive/make phone calls** — Phase 6.
+8. **Receive/make phone calls** — Phase 6: the agent answers calls to an assigned number (with an AI disclosure), transfers to a person on request, and staff can have it call back people who asked to be contacted, with a keypad opt-out and a do-not-call list. Built and tested, but BLOCKED until a Twilio account and number and an OpenAI key are configured.
 
 ## Illustrative pricing (NOT final — configurable, unverified economics)
 

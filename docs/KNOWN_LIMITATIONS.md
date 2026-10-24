@@ -4,9 +4,8 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 
 ## Scope gaps (by design — later phases)
 
-- No telephony (Phase 6).
 - No custom/cloned voices and no native-language validation (Phase 7).
-- **No configurable live human handoff.** The agent is instructed to offer to connect callers with a person, and lead capture is the hand-off path for now. Live transfer belongs with telephony (Phase 6).
+- **No live human handoff on the website widget.** Phone calls can transfer to a person (Phase 6); browser sessions still hand off through lead capture.
 
 ## Phase 3 — real-time voice
 
@@ -53,6 +52,29 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 - **Monitoring is a page, not an alerting system.** There is no external error tracker (e.g. Sentry) and nothing pages anyone. Browser-side errors aren't reported, only server errors. `onRequestError` hasn't yet been seen handling a real server error (the reporter itself is tested).
 - **The audit log is append-only by convention**: the app never edits or deletes entries, but it isn't cryptographically tamper-evident and database administrators can change it.
 
+## Phase 6 — telephony
+
+- **No live phone call has been made.** Twilio, OpenAI Realtime SIP and the sideband socket are built from their official documentation and SDK types and tested with test doubles at the API boundary. The realtime event names the sideband relies on (`response.function_call_arguments.done`, `conversation.item.create` with `function_call_output`, `response.create`) come from the SDK's types, not from a live session. One real request reached OpenAI's accept endpoint, refused for a test key.
+- **Phone calls are capped at 270 seconds (4½ minutes).**
+  - The AI's tool connection runs in `after()` inside the OpenAI webhook's function, which Vercel stops at `maxDuration` (300 s on every plan).
+  - Twilio's Dial `timeLimit` ends the AI leg at the reservation.
+  - On Vercel Pro both can be raised together: `maxDuration` up to 800 in `src/app/api/telephony/openai/route.ts`, and `MAX_PHONE_SESSION_SECONDS` in `src/server/telephony/config.ts`, keeping the 20-second margin the unit test checks.
+  - A separate long-running worker would remove the cap.
+- **If the tool connection drops, the call carries on without tools.** Audio is between Twilio and OpenAI, so the caller can keep talking, but knowledge search, contact capture, transfer and hang-up stop working; an error is recorded.
+- **No phone transcripts, summaries or recordings.** Spoken transcript consent wasn't built, so phone conversations store none.
+- **English only.** The disclosure, the opt-out prompt and the fallback messages are fixed English text (Twilio `<Say>`, en-GB voice). The AI replies in the caller's language when the agent allows it.
+- **Outbound calls are one at a time,** placed by staff. There is no campaign or list dialling, by design. The basis for the call (a lead, or a staff confirmation) is recorded, but the person's original request isn't verified.
+- **Calling hours are fixed** at 08:00–20:00 UTC (Ghana time). A business calling other time zones would need per-number hours.
+- **Ghana numbers aren't self-serve.** A platform admin registers numbers bought in Twilio; Ghana numbers need business KYC there.
+- **Twilio caller ID:** its Ghana guidelines say domestic outbound caller ID is "not guaranteed", and emergency calls aren't supported on Twilio numbers. The transfer shows the caller's number, which Twilio allows for forwarded inbound calls, unverified here.
+- **Transfer ends the AI's part of the call.** There is no warm transfer or whisper to the human, and no hold music. Only one transfer line per number.
+- **Reconciliation doesn't correct customer charges automatically.**
+  - A call charged its full reservation by the sweeper (both Twilio callbacks lost) stays charged until an operator issues a manual credit; the report shows it.
+  - Mismatches are listed only from the latest run.
+  - The job looks back 7 days at up to 200 calls a run.
+- **Phone cost rates are unset** until real Twilio and OpenAI invoices exist, so phone margins show as unpriced.
+- **The outbound hourly limit counts in the database**, so it is accurate across servers. The 10-per-minute summary limit and the voice route limits from earlier phases are still per process.
+
 ## Earlier-phase gaps still open
 
 - **No rate limiting on login/registration.** Must be fixed before any public launch.
@@ -65,7 +87,7 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 - **`prisma migrate dev` has a known false-positive drift** around the hand-managed pgvector index, and its interactive "name the new migration" prompt blocks in non-interactive shells (it left orphaned processes holding the migration lock during Phase 3). Use `--create-only` to generate and `prisma migrate deploy` to apply — see `docs/DECISIONS.md`.
 - **Integration tests reset the local development database.** They share the `sunleon_voice` database with `npm run dev`, so running the suite wipes any manual test data. A separate test database is a cheap follow-up.
 - **8 npm audit advisories (5 high, 3 moderate)** in dev-only or CLI-only dependency paths (`eslint-config-next` → `braces`; `mammoth` → `argparse` CLI). None is reachable from production code or user input. Phase 3 added `@ai-sdk/gateway` and `@ai-sdk/react` with no new advisories.
-- **Coverage is 85.7% statements (319 tests), above the 80% target**, but uneven: the Auth.js wrappers (`src/server/auth/config.ts`, `session.ts`, `sign-in.ts`), the real-network branches of the SSRF-safe fetcher and the PDF/DOCX extraction branches remain largely untested. The coverage scope is `src/lib/**` and `src/server/**`, so route handlers and React components are exercised but not counted.
+- **Coverage is 87.8% statements (400 tests), above the 80% target**, but uneven: the Auth.js wrappers (`src/server/auth/config.ts`, `session.ts`, `sign-in.ts`), the real-network branches of the SSRF-safe fetcher and the PDF/DOCX extraction branches remain largely untested. The coverage scope is `src/lib/**` and `src/server/**`, so route handlers and React components are exercised but not counted.
 - **Next.js dev tooling auto-generates `AGENTS.md`.** This is Next.js 16's own file, not an AI-attribution artifact.
 
 ## Things this document explicitly does not claim
@@ -75,6 +97,6 @@ Honest, current list. Updated every phase. Nothing here is advertised as working
 - No claim that AI conversation summaries, or transcripts from live calls, work yet.
 - No claim that the illustrative prices are profitable — margins are unknown until real costs are entered.
 - No claim of Ghanaian-language support (Twi, Ga, Ewe, etc.) or of Ghanaian-English voice quality.
-- No claim of telephony availability in Ghana or anywhere else.
+- No claim that a live phone call works yet, or that Ghanaian (+233) numbers are available to a given business (Twilio requires business KYC).
 - No claim of SOC2/ISO or any other certification.
 - No customer testimonials, usage metrics, or case studies exist anywhere — none have been fabricated.

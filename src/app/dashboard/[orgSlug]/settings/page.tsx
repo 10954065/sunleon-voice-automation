@@ -33,6 +33,10 @@ export default async function DataSettingsPage({ params }: { params: Promise<{ o
             </li>
             <li>Leads: only what a visitor typed into the contact form, kept for the period below.</li>
             <li>
+              Phone calls: the caller&apos;s number is kept with the call record for the lead period below, then removed.
+              Call audio is not recorded. The do-not-call list is kept until the owner removes an entry.
+            </li>
+            <li>
               Transcripts: only when turned on below <em>and</em> the visitor ticks the box before their call, kept for the
               period below. {transcriptCount} stored now.
             </li>

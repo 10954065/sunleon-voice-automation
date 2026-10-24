@@ -39,10 +39,11 @@ export async function getCostReport(now: Date = new Date()): Promise<Organizatio
         return emptyRow(organization, entitlements);
       }
       const range = { gte: entitlements.periodStart, lt: entitlements.periodEnd };
-      const [usage, unpriced, revenue] = await Promise.all([
+      const [cost, unpriced, revenue, voice] = await Promise.all([
+        // Cost covers every metric (AI and carrier); seconds used are only the AI seconds the plan counts.
         prisma.usageLedgerEntry.aggregate({
           where: { organizationId: organization.id, occurredAt: range },
-          _sum: { quantity: true, estimatedCostMicros: true },
+          _sum: { estimatedCostMicros: true },
         }),
         prisma.usageLedgerEntry.aggregate({
           where: { organizationId: organization.id, occurredAt: range, estimatedCostMicros: null },
@@ -52,8 +53,12 @@ export async function getCostReport(now: Date = new Date()): Promise<Organizatio
           where: { organizationId: organization.id, status: "SUCCESS", paidAt: range },
           _sum: { amountMinor: true },
         }),
+        prisma.usageLedgerEntry.aggregate({
+          where: { organizationId: organization.id, occurredAt: range, metric: "VOICE_SECONDS" },
+          _sum: { quantity: true },
+        }),
       ]);
-      const estimatedCostMicros = usage._sum.estimatedCostMicros ?? 0;
+      const estimatedCostMicros = cost._sum.estimatedCostMicros ?? 0;
       const unpricedSeconds = unpriced._sum.quantity ?? 0;
       const revenueMinor = revenue._sum.amountMinor ?? 0;
       return {
@@ -61,7 +66,7 @@ export async function getCostReport(now: Date = new Date()): Promise<Organizatio
         name: organization.name,
         slug: organization.slug,
         entitlements,
-        usedSeconds: usage._sum.quantity ?? 0,
+        usedSeconds: voice._sum.quantity ?? 0,
         unpricedSeconds,
         estimatedCostMicros,
         revenueMinor,

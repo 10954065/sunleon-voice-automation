@@ -86,7 +86,7 @@ describe("analytics", () => {
       ENGAGED: 1,
       NOT_CONNECTED: 1,
     });
-    expect(report.channels).toEqual({ TEST: 4, EMBED: 0 });
+    expect(report.channels).toEqual({ TEST: 4, EMBED: 0, PHONE: 0 });
     expect(report.agents).toEqual([
       expect.objectContaining({ agentId: seed.agent.id, name: seed.agent.name, sessions: 4, voiceSeconds: 190 }),
     ]);

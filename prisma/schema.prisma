@@ -58,6 +58,9 @@ model Organization {
   usageAlerts         UsageAlert[]
   billingTransactions BillingTransaction[]
   transcripts         ConversationTranscript[]
+  phoneNumbers        PhoneNumber[]
+  phoneCalls          PhoneCall[]
+  callOptOuts         CallOptOut[]
 }
 
 model Agent {
@@ -76,6 +79,7 @@ model Agent {
   knowledgeSources KnowledgeSource[]
   conversations    Conversation[]
   leads            Lead[]
+  phoneNumbers     PhoneNumber[]
 
   @@index([organizationId])
 }
@@ -105,6 +109,7 @@ model AgentVersion {
 enum ConversationChannel {
   TEST
   EMBED
+  PHONE
 }
 
 enum ConversationStatus {
@@ -124,6 +129,8 @@ enum ConversationOutcome {
   SHORT
   ENGAGED
   LEAD_CAPTURED
+  // Phone only: the caller was handed to a human (whether or not the human answered).
+  TRANSFERRED
 }
 
 model Conversation {
@@ -154,6 +161,7 @@ model Conversation {
   usageEvents  UsageEvent[]
   leads        Lead[]
   transcript   ConversationTranscript?
+  phoneCall    PhoneCall?
 
   @@index([organizationId, agentId])
   @@index([agentId, startedAt])
@@ -269,7 +277,10 @@ model Subscription {
 }
 
 enum UsageMetric {
+  // Realtime AI seconds: what the customer's allowance counts.
   VOICE_SECONDS
+  // Phone carrier seconds (Twilio): platform cost only, never counted against the allowance.
+  TELEPHONY_SECONDS
 }
 
 model UsageLedgerEntry {
@@ -539,6 +550,130 @@ model JobRun {
   error      String?
 
   @@index([job, startedAt])
+}
+
+// --- Phase 6: telephony ---
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum TransferStatus {
+  // The AI asked to hand the caller to a human and the call was redirected.
+  REQUESTED
+  CONNECTED
+  // The human line didn't answer; the caller was told the team will call back.
+  MISSED
+}
+
+enum OptOutSource {
+  // Pressed 9 at the start of an outbound call.
+  CALLER_KEYPAD
+  // Asked the AI not to be called again.
+  CALLER_REQUEST
+  STAFF
+}
+
+enum TelephonyWebhookSource {
+  TWILIO
+  OPENAI
+}
+
+// A carrier number bought and verified outside the app (Ghana numbers need business KYC), then
+// registered here by a platform admin and assigned to one organization.
+model PhoneNumber {
+  id                String   @id @default(cuid())
+  organizationId    String
+  // The agent that answers inbound calls (its published version). Null = inbound not answered.
+  agentId           String?
+  e164              String   @unique
+  providerNumberSid String?  @unique
+  label             String?
+  inboundEnabled    Boolean  @default(true)
+  outboundEnabled   Boolean  @default(false)
+  // Human line for transfers and fallback when the AI can't take the call.
+  transferNumber    String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent?       @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  calls        PhoneCall[]
+
+  @@index([organizationId])
+}
+
+// The carrier side of a PHONE conversation (one to one).
+model PhoneCall {
+  id                  String          @id @default(cuid())
+  conversationId      String          @unique
+  organizationId      String
+  phoneNumberId       String?
+  direction           CallDirection
+  // The caller (inbound) or the person called (outbound), E.164. Personal data: removed by
+  // erasure and after the organization's lead retention window.
+  remoteNumber        String?
+  // Twilio CallSid. Null only between creating an outbound call and Twilio accepting it.
+  providerCallSid     String?         @unique
+  // OpenAI realtime call_id, set once when the AI leg is accepted.
+  realtimeCallId      String?         @unique
+  // Last Twilio CallStatus applied; statuses only move forward (see src/server/telephony/lifecycle.ts).
+  providerStatus      String          @default("queued")
+  answeredBy          String?
+  // Twilio's DialCallDuration for the AI (SIP) leg: the provider-reported AI time.
+  aiLegSeconds        Int?
+  // Twilio's CallDuration for the whole call: what the carrier bills.
+  carrierSeconds      Int?
+  // From the reconciliation job (Twilio's Call resource). Micro-units of carrierPriceUnit.
+  carrierPriceMicros  Int?
+  carrierPriceUnit    String?
+  reconciledAt        DateTime?
+  transferStatus      TransferStatus?
+  transferRequestedAt DateTime?
+  failureReason       String?
+  // Outbound only: the staff member who placed the call.
+  requestedByUserId   String?
+  endedAt             DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  phoneNumber  PhoneNumber? @relation(fields: [phoneNumberId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, remoteNumber])
+}
+
+// Do-not-call list. Kept on erasure and retention on purpose: deleting it would let the business
+// call someone who asked not to be called.
+model CallOptOut {
+  id              String       @id @default(cuid())
+  organizationId  String
+  phoneNumber     String
+  source          OptOutSource
+  createdByUserId String?
+  createdAt       DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, phoneNumber])
+}
+
+model TelephonyWebhookEvent {
+  id             String                 @id @default(cuid())
+  source         TelephonyWebhookSource
+  // Twilio: call SID + callback kind + sequence. OpenAI: the webhook-id header.
+  eventKey       String
+  eventType      String
+  status         WebhookEventStatus
+  organizationId String?
+  note           String?
+  receivedAt     DateTime               @default(now())
+
+  @@unique([source, eventKey])
+  @@index([receivedAt])
 }
 
 // --- Auth.js (NextAuth) required models ---

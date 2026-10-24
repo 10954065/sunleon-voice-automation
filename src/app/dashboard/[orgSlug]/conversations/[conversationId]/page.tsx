@@ -7,7 +7,8 @@ import { OUTCOME_LABELS } from "@/server/conversations/outcome";
 import { readTranscriptEntries, transcriptExpiresAt } from "@/server/conversations/transcripts";
 import { isSummaryConfigured } from "@/server/conversations/summaries";
 import { conversationIdSchema } from "@/lib/validation/voice";
-import { formatDate, formatDateTime, formatDuration } from "@/lib/format";
+import { maskPhoneNumber } from "@/lib/phone";
+import { channelLabel, formatDate, formatDateTime, formatDuration } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DeleteTranscriptButton, GenerateSummaryButton } from "./conversation-controls";
 
@@ -86,7 +87,7 @@ export default async function ConversationDetailPage({
               (v{conversation.agentVersion.versionNumber})
             </Detail>
             <Detail label="Channel">
-              {conversation.channel === "TEST" ? "Dashboard test" : `Website · ${conversation.originDomain ?? "unknown"}`}
+              {channelLabel(conversation.channel, conversation.originDomain)}
             </Detail>
             <Detail label="Outcome">{conversation.outcome ? OUTCOME_LABELS[conversation.outcome] : "In progress"}</Detail>
             <Detail label="Billed time">
@@ -96,6 +97,36 @@ export default async function ConversationDetailPage({
             </Detail>
             <Detail label="Ended">{conversation.endedAt ? formatDateTime(conversation.endedAt) : "—"}</Detail>
             <Detail label="Close reason">{conversation.closeReason?.replace(/_/g, " ") ?? "—"}</Detail>
+            {conversation.phoneCall ? (
+              <>
+                <Detail label="Call">
+                  {conversation.phoneCall.direction === "INBOUND" ? "Incoming from " : "Outgoing to "}
+                  {maskPhoneNumber(conversation.phoneCall.remoteNumber)}
+                  {conversation.phoneCall.phoneNumber ? ` · line ${conversation.phoneCall.phoneNumber.e164}` : ""}
+                </Detail>
+                <Detail label="Carrier status">
+                  {conversation.phoneCall.providerStatus}
+                  {conversation.phoneCall.answeredBy ? ` · answered by ${conversation.phoneCall.answeredBy}` : ""}
+                </Detail>
+                <Detail label="Call time (carrier)">
+                  {conversation.phoneCall.carrierSeconds != null
+                    ? formatDuration(conversation.phoneCall.carrierSeconds)
+                    : "Not reported yet"}
+                  {conversation.phoneCall.aiLegSeconds != null
+                    ? ` · AI ${formatDuration(conversation.phoneCall.aiLegSeconds)}`
+                    : ""}
+                </Detail>
+                {conversation.phoneCall.transferStatus ? (
+                  <Detail label="Handoff">
+                    {conversation.phoneCall.transferStatus === "MISSED"
+                      ? "Transfer not answered — call this person back"
+                      : conversation.phoneCall.transferStatus === "CONNECTED"
+                        ? "Transferred to a person, who answered"
+                        : "Transfer started"}
+                  </Detail>
+                ) : null}
+              </>
+            ) : null}
           </dl>
           {conversation.errorMessage ? <p className="mt-4 text-sm text-red-700">{conversation.errorMessage}</p> : null}
         </CardContent>

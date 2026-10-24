@@ -144,6 +144,7 @@ export async function getAnalyticsReport(filters: AnalyticsFilters): Promise<Ana
     channels: {
       TEST: channelGroups.find((group) => group.channel === "TEST")?._count ?? 0,
       EMBED: channelGroups.find((group) => group.channel === "EMBED")?._count ?? 0,
+      PHONE: channelGroups.find((group) => group.channel === "PHONE")?._count ?? 0,
     },
     daily: zeroFilledDays(filters.from, filters.to, dailyRows),
     agents: agentRows

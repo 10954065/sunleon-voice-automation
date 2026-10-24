@@ -428,8 +428,9 @@ export async function recordLead(params: {
       },
     });
     // Leads are often submitted after the call ends; a still-active session gets its outcome at settle time.
+    // A transfer to a person outranks a lead (see classifyOutcome).
     await tx.conversation.updateMany({
-      where: { id: conversation.id, status: "COMPLETED" },
+      where: { id: conversation.id, status: "COMPLETED", outcome: { not: "TRANSFERRED" } },
       data: { outcome: "LEAD_CAPTURED" },
     });
     return { ok: true as const };

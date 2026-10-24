@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { requirePlatformAdmin } from "@/server/auth/platform-admin";
 import { TenantAccessError } from "@/server/auth/tenant";
 import { getMonitoringSnapshot } from "@/server/admin/overview";
-import { formatDateTime } from "@/lib/format";
+import { channelLabel, formatDateTime } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export const instant = false;
@@ -69,6 +69,23 @@ export default async function MonitoringPage() {
           label="Cron secret"
           detail={snapshot.configuration.cronSecret ? "Configured" : "Missing — scheduled jobs refuse to run"}
         />
+        <Indicator
+          ok={snapshot.configuration.twilio}
+          label="Twilio credentials"
+          detail={snapshot.configuration.twilio ? "Configured" : "Missing — phone calls are blocked"}
+        />
+        <Indicator
+          ok={snapshot.configuration.realtimeSip}
+          label="OpenAI Realtime SIP"
+          detail={
+            snapshot.configuration.realtimeSip ? "Configured" : "Missing — the AI can't answer phone calls"
+          }
+        />
+        <Indicator
+          ok={snapshot.configuration.publicUrl}
+          label="Public app URL"
+          detail={snapshot.configuration.publicUrl ? "Configured" : "Missing — Twilio signatures can't be checked"}
+        />
         {snapshot.jobs.map((job) => (
           <Indicator
             key={job.job}
@@ -95,6 +112,8 @@ export default async function MonitoringPage() {
       </div>
       <p className="text-xs text-stone-500">
         Paystack webhooks in the last 7 days: {snapshot.webhooks7d.processed} processed, {snapshot.webhooks7d.ignored} ignored.
+        Telephony webhooks in the last 24 hours: {snapshot.telephonyWebhooks24h.processed} processed,{" "}
+        {snapshot.telephonyWebhooks24h.ignored} ignored.
         Stuck sessions are active longer than any session can last; the sweep job closes them.
       </p>
 
@@ -145,7 +164,7 @@ export default async function MonitoringPage() {
               {snapshot.recentFailures.map((failure) => (
                 <li key={failure.id} className="px-6 py-3 text-sm">
                   <p className="text-stone-900">
-                    {failure.organization.name} · {failure.channel === "TEST" ? "dashboard test" : "website"}
+                    {failure.organization.name} · {channelLabel(failure.channel)}
                   </p>
                   <p className="text-xs text-stone-500">
                     {failure.endedAt ? formatDateTime(failure.endedAt) : "—"} · {failure.closeReason?.replace(/_/g, " ") ?? "—"}

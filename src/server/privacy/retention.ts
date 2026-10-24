@@ -6,13 +6,17 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Operational records hold no customer content, but still shouldn't pile up forever. */
 export const ERROR_REPORT_RETENTION_DAYS = 90;
 export const JOB_RUN_RETENTION_DAYS = 90;
+export const TELEPHONY_EVENT_RETENTION_DAYS = 90;
 
 export interface RetentionResult {
   [key: string]: number;
   transcriptsDeleted: number;
   leadsDeleted: number;
+  /** Caller numbers removed from phone call records past the lead retention window. */
+  callNumbersCleared: number;
   errorReportsDeleted: number;
   jobRunsDeleted: number;
+  telephonyEventsDeleted: number;
 }
 
 function daysBefore(now: Date, days: number): Date {
@@ -51,6 +55,7 @@ export async function applyRetention(now: Date = new Date()): Promise<RetentionR
   }
 
   let leadsDeleted = 0;
+  let callNumbersCleared = 0;
   const leadWindows = await prisma.organization.findMany({
     distinct: ["leadRetentionDays"],
     select: { leadRetentionDays: true },
@@ -72,17 +77,39 @@ export async function applyRetention(now: Date = new Date()): Promise<RetentionR
       });
       return deleted.count;
     });
+    // A caller's number on a call record is contact data like a lead's phone: same window.
+    const callWhere = { ...where, remoteNumber: { not: null } };
+    callNumbersCleared += await prisma.$transaction(async (tx) => {
+      const perOrganization = await tx.phoneCall.groupBy({ by: ["organizationId"], where: callWhere, _count: true });
+      if (perOrganization.length === 0) {
+        return 0;
+      }
+      const cleared = await tx.phoneCall.updateMany({ where: callWhere, data: { remoteNumber: null } });
+      await tx.auditLog.createMany({
+        data: perOrganization.map((row) => ({
+          organizationId: row.organizationId,
+          action: "retention.call_numbers_cleared",
+          metadata: { count: row._count, retentionDays: days },
+        })),
+      });
+      return cleared.count;
+    });
   }
 
-  const [errorReports, jobRuns] = await Promise.all([
+  const [errorReports, jobRuns, telephonyEvents] = await Promise.all([
     prisma.errorReport.deleteMany({ where: { lastSeenAt: { lt: daysBefore(now, ERROR_REPORT_RETENTION_DAYS) } } }),
     prisma.jobRun.deleteMany({ where: { startedAt: { lt: daysBefore(now, JOB_RUN_RETENTION_DAYS) } } }),
+    prisma.telephonyWebhookEvent.deleteMany({
+      where: { receivedAt: { lt: daysBefore(now, TELEPHONY_EVENT_RETENTION_DAYS) } },
+    }),
   ]);
 
   return {
     transcriptsDeleted,
     leadsDeleted,
+    callNumbersCleared,
     errorReportsDeleted: errorReports.count,
     jobRunsDeleted: jobRuns.count,
+    telephonyEventsDeleted: telephonyEvents.count,
   };
 }

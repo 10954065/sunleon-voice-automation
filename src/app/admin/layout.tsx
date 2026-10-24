@@ -11,6 +11,7 @@ const ADMIN_NAV = [
   { href: "/admin/monitoring", label: "Monitoring" },
   { href: "/admin/audit", label: "Audit log" },
   { href: "/admin/billing", label: "Billing" },
+  { href: "/admin/telephony", label: "Telephony" },
 ];
 
 /**

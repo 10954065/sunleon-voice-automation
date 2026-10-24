@@ -14,7 +14,7 @@ import { prepareEmbedSessionSchema, transcriptSchema } from "@/lib/validation/vo
 describe("URL filters", () => {
   it("ignores invalid values instead of failing the page", () => {
     expect(
-      conversationFiltersSchema.parse({ days: "13", agent: "'; DROP TABLE", channel: "PHONE", outcome: "WON", cursor: "../x" })
+      conversationFiltersSchema.parse({ days: "13", agent: "'; DROP TABLE", channel: "FAX", outcome: "WON", cursor: "../x" })
     ).toEqual({ days: 30, agent: undefined, channel: undefined, outcome: undefined, cursor: undefined });
   });
 

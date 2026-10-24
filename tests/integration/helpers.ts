@@ -16,6 +16,7 @@ export async function resetDatabase() {
   await prisma.organization.deleteMany();
   await prisma.user.deleteMany();
   await prisma.paymentWebhookEvent.deleteMany();
+  await prisma.telephonyWebhookEvent.deleteMany();
   await prisma.providerCostRate.deleteMany();
   await prisma.errorReport.deleteMany();
   await prisma.jobRun.deleteMany();

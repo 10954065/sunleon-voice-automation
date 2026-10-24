@@ -55,7 +55,10 @@ See `.env.example` for the authoritative list.
 | `NEXTAUTH_URL` | Base URL of the app (e.g. `http://localhost:3000` locally) | Phase 1 |
 | `AI_GATEWAY_API_KEY` | Vercel AI Gateway key, server-side only. Phase 2: knowledge-base embeddings. Phase 3: minting single-use realtime voice tokens for `openai/gpt-realtime-2` (the key's team must have access to that model). Without it, knowledge sources fail at the embedding step and voice sessions refuse to start, both with a clear error — see `docs/KNOWN_LIMITATIONS.md`. | Phase 2 (voice: Phase 3) |
 | `PAYSTACK_SECRET_KEY` | Paystack secret key, server-side only. Starts checkouts, verifies transactions, cancels subscriptions, and verifies webhook signatures. Optional: without it, online payment and the webhook are BLOCKED (503) and plans are assigned manually in `/admin/billing`. | Phase 4 |
-| `CRON_SECRET` | Bearer secret for `/api/cron/sweep-sessions` and `/api/cron/retention` (Vercel Cron sends it automatically when set in the project). Without it both routes answer 503: sessions are still swept per organization, but **retention deletions don't run**. | Phase 4 |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | Twilio carrier credentials, server-side only. Verify Twilio webhooks and place, redirect and fetch calls. Without them every Twilio webhook answers 503 and outbound calls are refused. | Phase 6 |
+| `OPENAI_API_KEY`, `OPENAI_WEBHOOK_SECRET`, `OPENAI_PROJECT_ID` | Direct OpenAI Realtime SIP access for the AI side of phone calls (the AI Gateway has no SIP endpoint). The webhook secret (`whsec_…`) verifies `realtime.call.incoming`; the project ID forms the SIP address. Without all three, inbound calls go to the number's transfer line or a short apology. | Phase 6 |
+| `TELEPHONY_OUTBOUND_CALLING_CODES` | Optional, comma-separated country codes outbound calls may reach (default `233`, Ghana only). | Phase 6 |
+| `CRON_SECRET` | Bearer secret for `/api/cron/sweep-sessions`, `/api/cron/retention` and `/api/cron/reconcile-telephony` (Vercel Cron sends it automatically when set in the project). Without it both routes answer 503: sessions are still swept per organization, but **retention deletions don't run**. | Phase 4 |
 
 ## Platform admin and billing setup (Phase 4)
 
@@ -67,6 +70,22 @@ See `.env.example` for the authoritative list.
 2. In `/admin/billing`, review the seeded plans (Trial, Starter, Growth — illustrative values) and enter a **voice cost rate** once real Gateway charges are known.
 3. **Paystack** (when the account exists): set `PAYSTACK_SECRET_KEY`; create matching monthly GHS plans in the Paystack dashboard and paste each `PLN_` code into the plan; set the webhook URL to `https://<host>/api/webhooks/paystack`; then run the Paystack checklist in `docs/PHASE_STATUS.md`.
 4. **Cron:** `vercel.json` schedules `/api/cron/sweep-sessions` daily at 03:00 UTC and `/api/cron/retention` at 03:30 UTC (the Hobby plan allows at most daily runs; if a plan refuses two cron jobs, call both routes from one schedule). Set `CRON_SECRET` in the Vercel project. `/admin/monitoring` shows each job's last run and flags one that hasn't succeeded in 26 hours.
+
+## Telephony setup (Phase 6)
+
+1. `NEXTAUTH_URL` must be the exact public HTTPS origin: Twilio signs the URL it called, and we check against this value. The webhook URLs below come from it.
+2. **Twilio:** buy and verify a voice number (Ghana: business registration, Ghana address, letter of authorization). Under the number's Voice configuration:
+   - "A call comes in" → Webhook `POST https://<host>/api/telephony/twilio/voice`.
+   - "Call status changes" → `POST https://<host>/api/telephony/twilio/status`.
+3. **OpenAI:** in the platform project, add a webhook for `realtime.call.incoming` → `https://<host>/api/telephony/openai`. Copy its secret into `OPENAI_WEBHOOK_SECRET` and the project ID into `OPENAI_PROJECT_ID`.
+4. In `/admin/telephony`, register the number for the organization. The owner then picks the agent, transfer line and switches on the Phone page.
+5. **Cron:** `vercel.json` schedules `/api/cron/reconcile-telephony` daily at 04:00 UTC (three jobs now; on a plan that limits cron jobs, call them from one schedule).
+6. **Call length:**
+   - `src/app/api/telephony/openai/route.ts` sets `maxDuration = 300` (the most every Vercel plan allows), and phone calls are capped at 270 s to fit.
+   - On Vercel Pro you can raise `maxDuration` (up to 800) and `MAX_PHONE_SESSION_SECONDS` in `src/server/telephony/config.ts` together, keeping at least 20 s between them (a unit test checks this).
+7. Run the live checklist in `docs/PHASE_STATUS.md` (Phase 6) and the monthly close in `docs/USAGE_RECONCILIATION.md`.
+
+**Running a production build locally** (`npm run build && npx next start`): set `AUTH_TRUST_HOST=true`, or Auth.js refuses sign-in with `UntrustedHost`. Vercel sets this automatically.
 
 ## Monitoring (Phase 5)
 

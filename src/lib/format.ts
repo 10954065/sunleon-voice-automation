@@ -16,6 +16,17 @@ export function formatDuration(seconds: number): string {
   return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${whole % 60}s`;
 }
 
+/** How a session reached the agent: "Dashboard test", "Website · example.com" or "Phone". */
+export function channelLabel(channel: "TEST" | "EMBED" | "PHONE", originDomain?: string | null): string {
+  if (channel === "TEST") {
+    return "Dashboard test";
+  }
+  if (channel === "PHONE") {
+    return "Phone";
+  }
+  return originDomain ? `Website · ${originDomain}` : "Website";
+}
+
 export function formatPercent(ratio: number | null): string {
   return ratio === null ? "—" : `${Math.round(ratio * 100)}%`;
 }

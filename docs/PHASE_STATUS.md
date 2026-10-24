@@ -1,6 +1,6 @@
 # Phase Status — Sunleon Voice
 
-Last updated: 2026-10-23 (Phase 5 implementation).
+Last updated: 2026-10-24 (Phase 6 implementation).
 
 | Phase | Status |
 |---|---|
@@ -10,6 +10,7 @@ Last updated: 2026-10-23 (Phase 5 implementation).
 | 3 — Real-time AI voice MVP | BLOCKED — built and tested up to the provider; live conversation needs `AI_GATEWAY_API_KEY` (see below) |
 | 4 — Usage, plans, and billing | BLOCKED — metering, plans, limits and the admin console built and verified; live Paystack payments need `PAYSTACK_SECRET_KEY` (see below) |
 | 5 — Analytics and operational controls | VERIFIED — history, analytics, leads, exports, retention, audit, admin, monitoring and error reporting built and tested; AI summaries need `AI_GATEWAY_API_KEY` (see below) |
+| 6 — Telephony | BLOCKED — inbound and authorized outbound calling, webhooks, lifecycle, metering, transfer, handoff, consent, opt-out, failure recovery and reconciliation built and tested up to both providers; a live test call needs a Twilio account with a number and an OpenAI API key, webhook secret and project (see below) |
 | 6 — Telephony | NOT STARTED |
 | 7 — Advanced voice and integrations | NOT STARTED |
 | 8 — Production hardening | NOT STARTED |
@@ -417,3 +418,213 @@ See `docs/KNOWN_LIMITATIONS.md` → "Phase 5 — analytics and data controls". T
 ### Phase 6 acceptance criteria (for reference, not yet attempted)
 
 A configured test number completes an end-to-end call where supported, events are idempotent, and usage reconciliation is documented.
+
+## Phase 6 — Telephony: BLOCKED (built and tested up to the providers; no live call yet)
+
+Everything in the Phase 6 brief is built, tested against real Postgres with signed provider requests, and checked over real HTTP and in a real browser. What isn't done is the one thing that needs accounts: a real phone call. There is no Twilio account or number and no direct OpenAI key in this environment, and a Ghana (+233) number needs business KYC with Twilio (registration documents and a Ghana address). So the first acceptance criterion is BLOCKED, not met.
+
+### How a call works
+
+- **Carrier: Twilio Programmable Voice.** It owns the number and sends a signed webhook when a call comes in. It enforces the time limit, reports call progress and durations, and carries out transfers.
+- **AI: OpenAI Realtime over SIP.** Twilio's TwiML dials `sip:<project>@sip.api.openai.com;transport=tls`, with our conversation id in a custom `X-Sunleon-Conversation` header. OpenAI sends a signed `realtime.call.incoming` webhook. We accept the call server-side with the agent's instructions, voice and tools.
+- **Our server only answers HTTP webhooks.** No audio passes through it, which is why it fits serverless hosting.
+- **Why not the AI Gateway:** the Gateway has no SIP endpoint, so phone calls need a direct OpenAI key (`docs/DECISIONS.md`).
+- **Verified against official sources on 2026-10-23:**
+  - OpenAI's realtime-SIP guide and the installed `openai` SDK 7.43.0 types (accept, reject, refer, hangup, the sideband WebSocket, Standard Webhooks signing).
+  - Twilio's security, `<Dial>`, `<Sip>` and Call-resource docs, plus the installed `twilio` SDK 6.2.0 types.
+  - Twilio's Ghana regulatory and voice guidelines.
+  - Twilio's own worked signature example, used as a unit test vector, which passes.
+
+### What was built
+
+- **Inbound calls** (`/api/telephony/twilio/voice`):
+  - Organization and agent come only from the number that was called, a row a platform admin assigned.
+  - Allowance is reserved under the same per-organization lock as every session. A phone call is capped at 270 seconds (see limitations).
+  - The caller hears "You've reached {business}. This call is answered by an AI assistant." before the AI joins.
+- **The AI leg** (`/api/telephony/openai`):
+  - The OpenAI webhook is verified with the official SDK.
+  - The conversation id from the SIP header is claimed once: an active PHONE conversation, not yet accepted, within 2 minutes.
+  - The call is then accepted with server-side instructions, so the business's instructions never pass through a caller's device, unlike the browser widget. Any other call is rejected with SIP 603.
+  - A sideband WebSocket then greets the caller and runs the tools:
+    - `search_knowledge`
+    - `save_contact_details` (only if lead capture is on; it can use the calling number with the caller's agreement)
+    - `transfer_to_human` (only if a transfer line is set)
+    - `opt_out_of_calls`
+    - `end_call`
+- **Authorized outbound calling** (Phone page → "Call someone back", Agent Manager and above):
+  - One call per request; there is no list or bulk dialling.
+  - The person must have asked: either the number belongs to a lead with this business, or the staff member ticks "This person asked us to call them", which is recorded in the audit log.
+  - The number must not be on the do-not-call list.
+  - Outbound must be on for the number, with a published agent.
+  - Destinations: Ghana numbers only by default (`TELEPHONY_OUTBOUND_CALLING_CODES` to change), to limit toll fraud.
+  - Calls only between 08:00 and 20:00 Ghana time.
+  - At most 20 calls an hour per organization, and no repeat call to the same number within 10 minutes.
+  - The time-sensitive checks run inside the organization's lock.
+  - Answering machines are hung up on (Twilio answering-machine detection).
+- **Consent and opt-out:**
+  - Every call says it is an AI assistant before the AI speaks, and the AI must confirm it is an AI if asked.
+  - Outbound calls say who is calling and why, and offer "press 9 to stop calls from {business}" before the AI joins.
+  - People reach the do-not-call list by pressing 9, by asking the AI, or by staff adding them. Removing an entry is Owner-only with a typed confirmation.
+  - The list survives erasure and retention on purpose.
+  - Phone calls store no audio and no transcript.
+- **Transfer and handoff:**
+  - `transfer_to_human` replaces the live call's TwiML through Twilio's API with a `<Dial>` to the business's human line, showing the caller's number. The claim is single-use.
+  - The AI usage is settled at that moment, with outcome **Transferred to a person**.
+  - The transfer result records whether a person answered.
+  - If no one answers, the caller hears that the team will get back to them. The call is marked "Transfer not answered — call this person back" on the conversation and Phone pages, and the contact details the AI took before transferring are in Leads.
+- **Call lifecycle and idempotency:**
+  - Every Twilio webhook (voice, Dial actions, keypad, status) and the OpenAI webhook is logged in `TelephonyWebhookEvent`.
+  - A redelivered voice webhook returns the same TwiML without a second reservation.
+  - A redelivered OpenAI event, or a second event for an already accepted call, is a no-op and never rejects a live call.
+  - Status callbacks are applied under a row lock and only move a call forward: queued → initiated → ringing → in-progress → terminal. A late or duplicated one is ignored and logged.
+  - Settlement happens once (the existing ACTIVE → COMPLETED claim), and both ledger rows have unique keys.
+  - A Dial action whose signed CallSid doesn't match the conversation in its URL is ignored.
+- **Usage metering:**
+  - `VOICE_SECONDS` (the customer's allowance) uses Twilio's own measurement of the AI leg (`DialCallDuration`, source `provider_reported`), never more than the reservation.
+  - The new `TELEPHONY_SECONDS` metric records the carrier's whole-call seconds as platform cost only.
+  - Cost rates can now be set for each stream (browser voice, phone AI, Twilio inbound, Twilio outbound) in `/admin/billing`, and margins include carrier cost.
+- **Failure recovery:**
+  - Unknown number → "not in service".
+  - No plan or minutes, no published agent, or AI not configured → the transfer line if set, otherwise a short apology.
+  - AI leg never connects, or OpenAI refuses the accept → the conversation fails unbilled and the caller goes to the transfer line.
+  - Lost Dial action → the status callback settles the call on our clock.
+  - Lost status callback → the reconciliation job fills in carrier usage from Twilio's records.
+  - Never-settled call → the existing sweeper.
+  - Carrier refuses an outbound call → the conversation fails and its reservation is freed.
+  - Failed transfer → rolled back, so the AI can take a message.
+  - Sideband failure → the call continues without tools, and an error is recorded.
+- **Usage reconciliation:**
+  - A daily `/api/cron/reconcile-telephony` job (04:00 UTC, `CRON_SECRET`) fetches Twilio's Call record for each finished call: duration and price.
+  - It fills in carrier usage lost with a callback and reports duration mismatches.
+  - `/admin/telephony` shows the 30-day comparison per organization.
+  - The procedure, including the monthly close against Twilio and OpenAI invoices, is in **`docs/USAGE_RECONCILIATION.md`**.
+- **Dashboard and admin:**
+  - The Phone page (all members) has numbers and settings (Owner/Admin), call-back (Agent Manager+), recent calls with masked numbers, and the do-not-call list. It shows a notice when telephony isn't configured.
+  - The conversation detail page has a phone panel.
+  - "Phone" is a channel in history, analytics and filters.
+  - `/admin/telephony` (platform admin) has the provider setup URLs, number registry, release, and the reconciliation report.
+  - `/admin/monitoring` shows Twilio, OpenAI SIP and public-URL status, the new job, and 24-hour telephony webhook counts.
+- **Privacy:**
+  - A caller's number on a call record is contact data. Erasure by phone removes it, and the retention job removes it after the lead retention window.
+  - Telephony webhook logs are pruned after 90 days.
+  - Audit entries mask phone numbers.
+
+### Acceptance criteria (from the master build prompt) — status
+
+| Criterion | Status |
+|---|---|
+| A configured test number completes an end-to-end call where supported | **BLOCKED.** No Twilio account or number and no direct OpenAI key exist here. What is proven: the whole call flow through the real webhook routes with signed requests and test doubles at the two provider APIs (19 integration tests); the provider adapters' exact SDK calls (8 contract tests); and, over real HTTP against a production build, a signed inbound call. In that HTTP run, a real accept request reached OpenAI and was refused for the invalid test key, and the call fell back to the transfer line as designed. The live checklist is under "Manual steps". |
+| Events are idempotent | **Met.** Tested: a retried voice webhook (one conversation, one reservation); a redelivered OpenAI event and a second event for the same call (accepted once, never rejected); a repeated Dial action (one ledger row); duplicated and late status callbacks ("duplicate" / "ignored", status never moves backwards); a repeated transfer request (one redirect); and reconciliation re-runs. Also seen live over HTTP: a redelivered `completed` callback answered `duplicate`. |
+| Usage reconciliation is documented | **Met.** `docs/USAGE_RECONCILIATION.md` covers what each metric measures and where each number comes from, the daily job, how to read the admin report, and the monthly close against provider invoices. The job and report are tested (lost callback recovered, prices stored, mismatches reported, re-runs idempotent, Twilio failure counted). |
+
+### Quality gates — actual results
+
+- `npm run typecheck`: clean.
+- `npm run lint`: 0 errors, 1 warning (the generated `coverage/` folder, as before).
+- `npm run test:coverage`: **400 tests in 42 files, all passing.** Statements **87.8%** overall; `server/telephony` 93.3%, `server/billing` 92.4%.
+- New suites:
+  - `tests/integration/telephony-calls.test.ts` (19)
+  - `tests/integration/telephony-outbound.test.ts` (21)
+  - `tests/unit/telephony.test.ts` (33)
+  - `tests/unit/telephony-adapters.test.ts` (8)
+- Seven existing assertions were updated for intended changes: new zero-valued fields on erasure and retention results, the PHONE channel, and one test that used "PHONE" as its example of an invalid channel.
+- `npm run build`: succeeds; the new routes `/api/telephony/twilio/[event]`, `/api/telephony/openai`, `/api/cron/reconcile-telephony`, `/dashboard/[orgSlug]/phone` and `/admin/telephony` are present.
+- Migration `20261023084127_phase6_telephony`: spurious `DROP INDEX` removed; adds E.164 CHECK constraints on every stored phone number and non-negative duration checks. Applied with `migrate deploy`.
+
+### Manual verification (production build on localhost, test-only credentials)
+
+Run with `next start` and fake Twilio and OpenAI values (an invalid OpenAI key, a locally generated webhook secret):
+- **Admin and settings:**
+  - `/admin/telephony` showed the provider setup URLs; registering "030 200 0001" stored +233302000001.
+  - The Phone page assigned the published agent, saved the transfer line "030 200 0099" as +233302000099, and turned outbound on.
+- **A signed inbound call over HTTP** (a local script signing exactly as Twilio and OpenAI do):
+  - Forged signature → 403.
+  - Voice webhook → the AI disclosure plus a SIP dial with `timeLimit="270"`.
+  - OpenAI incoming → our server called OpenAI's real accept endpoint, which refused the invalid key (401), recorded as `accept_failed`.
+  - Dial result `failed` → "Please hold while we connect you to a member of the team", dialling the transfer line with the caller's number.
+  - Status `completed` → applied; the same callback again → `duplicate`.
+  - In the database: the conversation was FAILED and unbilled (no `VOICE_SECONDS` row), 21 carrier seconds were recorded as `TELEPHONY_SECONDS`, the five webhooks were logged, and one grouped error report was created.
+- **Browser:**
+  - The Phone page listed the call with the number masked (+233 ••• ••• 567) and outcome Failed.
+  - "Call now" for the lead at 21:39 UTC was refused: "Calls can only be placed between 08:00 and 20:00 Ghana time."
+  - Adding "024 123 4567" to the do-not-call list showed it masked, with source "Added by staff".
+  - The conversation page showed the phone panel (incoming from a masked number, line, carrier status, 21s, not billed).
+  - `/admin/monitoring` showed the three telephony indicators, the `reconcile-telephony` job and "Telephony webhooks in the last 24 hours: 5 processed".
+- **Found and fixed during this pass:**
+  - OpenAI's 401 message contains a masked key fragment (`sk-local********-key`), which was stored as-is in the conversation's error message shown to staff. The scrubber now redacts OpenAI-style `sk-…` keys, and every stored telephony provider error goes through it (the test asserts `[redacted-key]`). The browser pass ran on the build from before this fix.
+  - The do-not-call "Type REMOVE" field was too narrow for its placeholder and has been widened.
+- **Not observed live:** a real phone call, a real SIP accept, the sideband socket with a real call, a real transfer, Twilio answering-machine detection, and a real reconciliation fetch.
+- **Dev-only incidents:**
+  - The integration suite reset the shared development database midway through the browser pass (a known limitation), so the sample workspace was re-created and the checks repeated.
+  - Locally, `next start` needs `AUTH_TRUST_HOST=true` for sign-in (Vercel sets it automatically); this is now in the runbook.
+
+### Security controls implemented (new this phase)
+
+- **Webhook authentication:**
+  - Twilio's `X-Twilio-Signature` (official SDK helper) is checked over the configured public URL, never the Host header, and the payload's `AccountSid` must be ours.
+  - OpenAI's Standard Webhooks signature is checked by the official SDK, with a 5-minute tolerance.
+  - Both happen before anything is read or written. A missing configuration answers 503, never "accept unverified".
+- **Tenant scoping:**
+  - Organization and agent come from the called number (admin-assigned), the outbound call's own row, or the conversation row; never from the request.
+  - Dial actions must carry the call's own signed CallSid.
+  - Phone settings, calls, the opt-out list and erasure are scoped to the member's organization (tested).
+- **The SIP header is untrusted:** the conversation id is an unguessable UUID, claimed once within a 2-minute window. A stray or replayed INVITE is rejected with 603.
+- **Outbound abuse limits:**
+  - Role check, request basis (lead or audited confirmation), do-not-call list, Ghana-only destinations by default, calling hours, hourly and per-number limits, one call per request.
+  - A carrier time limit on every call.
+- **Privacy:**
+  - Caller numbers are masked on every page and in audit entries; full numbers stay only on the call record (erasable, retention-limited) and on leads.
+  - No audio or phone transcript is stored.
+  - Provider error text is scrubbed before it is stored.
+- **Tool calls:** arguments from the model are validated like request bodies. Transfer and contact capture are offered only when the business enabled them.
+
+Full detail in `docs/SECURITY_MODEL.md`.
+
+### Required environment variables
+
+All are new and server-side only; see `.env.example`.
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`: carrier and webhook verification.
+- `OPENAI_API_KEY`, `OPENAI_WEBHOOK_SECRET` (`whsec_…`), `OPENAI_PROJECT_ID` (`proj_…`): the AI side of calls.
+- `TELEPHONY_OUTBOUND_CALLING_CODES` (optional; default `233`).
+
+`NEXTAUTH_URL` must be the public HTTPS origin, because Twilio signatures are checked against it. `CRON_SECRET` now also runs reconciliation.
+
+### External accounts/credentials still needed
+
+- **A Twilio account**, upgraded from trial for outbound calls to unverified numbers. Then:
+  - a phone number: a Ghana mobile number needs a business registration certificate, a Ghana address and a letter of authorization (Twilio's Ghana regulatory guidelines). A non-Ghana test number works for a first end-to-end test; set `TELEPHONY_OUTBOUND_CALLING_CODES` to include its country.
+  - Twilio's Ghana guidelines say emergency calls aren't supported and outbound caller ID is "not guaranteed" domestically.
+- **An OpenAI platform account with Realtime access:** an API key, the project ID, and a project webhook for `realtime.call.incoming` with its signing secret.
+- Still outstanding from earlier phases: `AI_GATEWAY_API_KEY` and `PAYSTACK_SECRET_KEY`.
+
+### Known limitations / blockers
+
+See `docs/KNOWN_LIMITATIONS.md` → "Phase 6 — telephony". The most important:
+- **No live call yet.**
+- **Phone calls are capped at 4½ minutes.** The tool connection runs inside one 300-second function; this can be raised on Vercel Pro.
+- **No phone transcripts or summaries.**
+- **English prompts only.**
+- **No automatic customer credit** when reconciliation shows a sweeper over-charge.
+
+### Manual steps for the developer
+
+1. `npx prisma migrate deploy`.
+2. Set the env vars above in Vercel. `NEXTAUTH_URL` must be the public HTTPS URL; the paths used below come from it.
+3. Twilio: buy and verify a number. Set its Voice "A call comes in" webhook to `POST https://<host>/api/telephony/twilio/voice` and "Call status changes" to `POST https://<host>/api/telephony/twilio/status`. Both URLs are shown on `/admin/telephony`.
+4. OpenAI: create a project webhook for `realtime.call.incoming` pointing to `https://<host>/api/telephony/openai`, and copy its secret into `OPENAI_WEBHOOK_SECRET`.
+5. In `/admin/telephony`, register the number for the organization. On its Phone page, choose the agent, a transfer line, and the inbound/outbound switches.
+6. **Live checklist** (the BLOCKED criterion):
+   - (a) Call the number and hear the disclosure, then the AI.
+   - (b) Ask a knowledge question (`search_knowledge`).
+   - (c) Leave contact details, then check Leads.
+   - (d) Ask for a person: the transfer rings the human line; let it ring out and check "Transfer not answered".
+   - (e) Say goodbye and check that the AI hangs up.
+   - (f) Check the conversation page: AI time from Twilio, carrier time, outcome.
+   - (g) Place a call-back to your own phone during 08:00–20:00 GMT, press 9, and confirm it's on the do-not-call list and that the next attempt is refused.
+   - (h) Run `/api/cron/reconcile-telephony` the next day and compare `/admin/telephony` with Twilio's call log.
+   - Note any difference in the realtime events (event names or tool-call shapes) from those in `src/server/telephony/sideband.ts`.
+7. Enter the phone cost rates in `/admin/billing` once the first invoices arrive (`docs/USAGE_RECONCILIATION.md` §5).
+
+### Phase 7 acceptance criteria (for reference, not yet attempted)
+
+From the roadmap: advanced voice, validated local languages, and integrations. Voice quality and language support may only be advertised after native-speaker validation (Decision 3 of the brief). The exact acceptance wording comes from the master build prompt when Phase 7 starts.

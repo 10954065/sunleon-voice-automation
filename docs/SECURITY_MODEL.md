@@ -70,6 +70,42 @@ Describes controls implemented through Phase 5, and flags what is explicitly def
 - **Error reporting.** `onRequestError` records the route pattern, never the request path, headers or cookies. Messages and stacks are scrubbed of emails, phone numbers, bearer tokens, API keys and credentialed URLs before they are logged or stored. Visitors see only a generic page with a digest.
 - **Platform console.** It shows counts and configuration presence (never secret values or customer content). `/api/health` reports only up or down.
 
+## Telephony (Phase 6)
+
+- **Webhook authentication before anything else.**
+  - Twilio: `X-Twilio-Signature` (official SDK helper) over the configured public URL (`NEXTAUTH_URL` + path + query, never the Host header), plus `AccountSid` must equal ours.
+  - OpenAI: Standard Webhooks signature verified by the official SDK (`webhook-id`, `webhook-timestamp` within 5 minutes, `webhook-signature`).
+  - No configuration → 503. Bodies over 64 KB (Twilio) or 256 KB (OpenAI) → 413.
+- **Tenant comes from our own rows.**
+  - Inbound: the organization and agent belong to the called number, which only a platform admin assigns.
+  - Callbacks name a conversation in the URL, and the signed `CallSid` must match that conversation's call.
+  - Tools run with the conversation row's scope.
+  - Phone actions use the member's organization.
+- **The SIP header is untrusted data.** The `X-Sunleon-Conversation` id is a random UUID, accepted only for an active PHONE conversation with no AI leg yet, within 2 minutes, and claimed atomically once. Anything else is declined (SIP 603). The OpenAI webhook can only accept calls we set up.
+- **Outbound calling is authorized and bounded:**
+  - Agent Manager and above.
+  - A lead's own number, or a confirmation that the person asked (audit-logged with the number masked).
+  - Do-not-call list, allowed calling codes (Ghana only by default — toll-fraud control), 08:00–20:00 Ghana time.
+  - 20 calls per hour per organization and a 10-minute per-number cooldown, checked inside the organization lock.
+  - No bulk dialling.
+  - Every call has a carrier time limit, and answering machines are hung up on.
+- **Consent and opt-out:**
+  - Every call discloses the AI before it speaks.
+  - Outbound calls offer a keypad opt-out first.
+  - Opt-outs (keypad, spoken, staff) can be removed only by the Owner with a typed confirmation, and they survive erasure.
+- **Model-driven actions are constrained:**
+  - Tool arguments are schema-validated.
+  - Contact capture and transfer exist only when the business enabled them.
+  - A transfer is a single-use claim.
+  - The model can't dial arbitrary numbers: transfer always goes to the number's configured line.
+  - The AI's instructions travel server to OpenAI only.
+- **Personal data:**
+  - Caller numbers are masked in the UI and audit log.
+  - Erasure and lead retention clear them from call records.
+  - No audio or phone transcript is stored.
+  - Provider error text is scrubbed (including OpenAI-style `sk-…` keys) before storage.
+  - Webhook logs keep keys and notes only and are pruned after 90 days.
+
 ## Transport / storage encryption
 
 - Transport encryption (TLS) is the responsibility of the hosting platform (Vercel) once deployed; local dev runs over plain HTTP on localhost.

@@ -6,7 +6,9 @@
 
 Phase 4 adds payments through **Paystack**, likewise implemented and tested up to the provider boundary, with live payments BLOCKED on credentials.
 
-Everything after Phase 4 is still an **evaluation plan** for later phases, not a claim that those integrations exist or that pricing/capabilities have been verified against current provider documentation. Each will be re-verified against official docs immediately before it is implemented, per Part D: "Use official, current provider documentation... Never invent APIs or assume an account has access to a feature."
+Phase 6 adds telephony through **Twilio** (carrier) and **OpenAI Realtime over SIP** (the AI on the call), again built and tested up to both providers, with the live call BLOCKED on credentials.
+
+Everything after Phase 6 is still an **evaluation plan** for later phases, not a claim that those integrations exist or that pricing/capabilities have been verified against current provider documentation. Each will be re-verified against official docs immediately before it is implemented, per Part D: "Use official, current provider documentation... Never invent APIs or assume an account has access to a feature."
 
 ## Phase 2 — Knowledge ingestion & retrieval (implemented)
 
@@ -60,11 +62,33 @@ Important constraint found while building: the Gateway realtime model **ignores 
 
 **Error reporting** is in-house for now: structured JSON log lines plus a grouped `ErrorReport` table shown on `/admin/monitoring`. No third-party tracker (e.g. Sentry) or alerting service is integrated. Adding one later means calling it from `reportError`, plus a DSN and a data-processing review.
 
-## Phase 6 — Telephony
+## Phase 6 — Telephony (implemented; live call BLOCKED on credentials)
 
-| Need | Candidates to evaluate | Notes |
+| Need | What's used | Notes |
 |---|---|---|
-| Inbound/outbound calling | Twilio, Africa's Talking | Must verify actual Ghanaian number availability and pricing before advertising local calling — do not assume |
+| Carrier: numbers, inbound webhooks, outbound calls, status, transfer | **Twilio Programmable Voice**, official `twilio` SDK 6.2.0, behind `TelephonyCarrier` (`src/server/telephony/twilio.ts`) | Requests are verified with the SDK's `validateRequest`, which also passes Twilio's documented example as a unit test. Outbound: `calls.create` (status callbacks, `timeLimit`, `machineDetection: "Enable"`). Transfer: `calls(sid).update({ twiml })`. Reconciliation: `calls(sid).fetch()` (duration, price). |
+| The AI on the call | **OpenAI Realtime SIP**, official `openai` SDK 7.43.0 (`realtime.calls.accept/reject/hangup`, `webhooks.unwrap`, `OpenAIRealtimeWS` with `callID` for the sideband), model `gpt-realtime-2` | The **Vercel AI Gateway has no SIP endpoint**, so this is a direct OpenAI key (Decision in `docs/DECISIONS.md`). The SDK requires the optional `ws` peer dependency (8.22.0), which is installed. |
+| Linking the two | Twilio `<Dial><Sip>sip:<project>@sip.api.openai.com;transport=tls?X-Sunleon-Conversation=<id></Sip>` | Twilio documents custom `X-` headers on `<Sip>` URIs. OpenAI's webhook type says SIP INVITE headers are passed through in `sip_headers` and should be treated as untrusted. Whether the custom header arrives end to end is **unverified live**; it's the first thing the live checklist checks. |
+
+**Ghana availability** (Twilio's regulatory and voice guidelines, read on 2026-10-23):
+- Ghana mobile numbers exist for **businesses only**. They need business registration, a Ghana address and a letter of authorization.
+- Domestic and international inbound and outbound calls are supported.
+- Domestic outbound caller ID is "Local (Non-guaranteed)".
+- Emergency calls aren't supported.
+- Pricing was not verified.
+
+**Africa's Talking** was considered: its help centre lists voice in Ghana. It wasn't chosen because its voice API is callback/XML-based, and no realtime audio or SIP route into OpenAI was found in its public docs. It remains an option for Ghana numbers if Twilio KYC is a problem, via its SIP trunking, unverified.
+
+**Verified vs not:**
+- **Verified, with tests and real HTTP, without credentials:** signature checks for both providers; the whole call lifecycle against our webhook routes; the exact SDK calls we make (contract tests with the SDKs mocked); and one real accept request reaching OpenAI, refused for a test key.
+- **Not verified (BLOCKED on a Twilio account, a number and an OpenAI key):**
+  - a real call and the custom SIP header passing through
+  - OpenAI accepting our session config
+  - the sideband events matching the SDK types
+  - transfer audio
+  - answering-machine detection
+  - Twilio's real status-callback and Call-record values
+
 
 ## Hosting / infrastructure (ongoing)
 
@@ -81,6 +105,6 @@ Important constraint found while building: the Gateway realtime model **ignores 
 - **Before production (any phase):** a managed Postgres provider with pgvector support, an S3-compatible object storage provider (to replace the local-disk adapter), and a linked Vercel project.
 - **Phase 4:** Paystack account and secret key (`PAYSTACK_SECRET_KEY`, which also verifies webhooks), GHS plans created in the Paystack dashboard, the webhook URL set; plus `CRON_SECRET` for the session sweeper. Until then, platform admins assign plans manually.
 - **Phase 5:** nothing new. `AI_GATEWAY_API_KEY` also unlocks summaries; `CRON_SECRET` now also runs the retention job. Optional later: an error-tracking service and an alerting channel.
-- **Phase 6:** telephony provider account + API keys, phone number provisioning.
+- **Phase 6:** a Twilio account (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`) with a voice number (a Ghana number needs business KYC), and an OpenAI platform project with Realtime access (`OPENAI_API_KEY`, `OPENAI_PROJECT_ID`, and a `realtime.call.incoming` project webhook whose secret is `OPENAI_WEBHOOK_SECRET`).
 
 None of these blocked Phase 1 or the non-embedding parts of Phase 2.

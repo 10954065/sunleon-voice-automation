@@ -4,12 +4,13 @@ import { prisma } from "@/server/db/client";
 import { isPaymentConfigured } from "@/server/billing/paystack";
 import { MAX_SESSION_SECONDS } from "@/lib/voice";
 import { STALE_GRACE_SECONDS } from "@/server/billing/usage";
+import { getPublicBaseUrl, getRealtimeSipConfig, getTwilioCredentials } from "@/server/telephony/config";
 
 export const ADMIN_ORG_PAGE_SIZE = 50;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 /** Jobs scheduled in vercel.json; monitoring flags any that hasn't succeeded within this window. */
-export const SCHEDULED_JOBS = ["sweep-sessions", "retention"] as const;
+export const SCHEDULED_JOBS = ["sweep-sessions", "retention", "reconcile-telephony"] as const;
 export const JOB_STALE_AFTER_MS = 26 * HOUR_MS;
 
 /**
@@ -92,6 +93,7 @@ export async function getMonitoringSnapshot(now: Date = new Date()) {
     failedKnowledgeSources,
     webhookGroups,
     problemTransactions,
+    telephonyGroups,
   ] = await Promise.all([
     databaseReachable(),
     prisma.errorReport.findMany({ orderBy: { lastSeenAt: "desc" }, take: 50 }),
@@ -115,6 +117,7 @@ export async function getMonitoringSnapshot(now: Date = new Date()) {
     prisma.knowledgeSource.count({ where: { status: "FAILED" } }),
     prisma.paymentWebhookEvent.groupBy({ by: ["status"], where: { receivedAt: { gte: weekAgo } }, _count: true }),
     prisma.billingTransaction.count({ where: { status: { in: ["FAILED", "REJECTED"] }, createdAt: { gte: weekAgo } } }),
+    prisma.telephonyWebhookEvent.groupBy({ by: ["status"], where: { receivedAt: { gte: dayAgo } }, _count: true }),
   ]);
 
   return {
@@ -124,6 +127,9 @@ export async function getMonitoringSnapshot(now: Date = new Date()) {
       aiGateway: Boolean(process.env.AI_GATEWAY_API_KEY),
       paystack: isPaymentConfigured(),
       cronSecret: Boolean(process.env.CRON_SECRET?.trim()),
+      twilio: Boolean(getTwilioCredentials()),
+      realtimeSip: Boolean(getRealtimeSipConfig()),
+      publicUrl: Boolean(getPublicBaseUrl()),
     },
     errorReports,
     errors24h,
@@ -141,5 +147,9 @@ export async function getMonitoringSnapshot(now: Date = new Date()) {
       ignored: webhookGroups.find((group) => group.status === "IGNORED")?._count ?? 0,
     },
     problemTransactions7d: problemTransactions,
+    telephonyWebhooks24h: {
+      processed: telephonyGroups.find((group) => group.status === "PROCESSED")?._count ?? 0,
+      ignored: telephonyGroups.find((group) => group.status === "IGNORED")?._count ?? 0,
+    },
   };
 }

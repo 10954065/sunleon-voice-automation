@@ -4,8 +4,7 @@ import { prisma } from "@/server/db/client";
 import { Prisma } from "@/generated/prisma/client";
 import { requirePlatformAdmin } from "@/server/auth/platform-admin";
 import { addMonthsUtc } from "@/lib/billing";
-import { REALTIME_VOICE_MODEL } from "@/lib/voice";
-import { VOICE_PROVIDER_ID } from "@/server/billing/usage";
+import { COST_RATE_KEYS, isCostRateKeyId } from "@/server/billing/costRates";
 import { assignPlanSchema, costRateSchema, createPlanSchema, planSettingsSchema } from "@/lib/validation/billing";
 
 export type AdminActionResult = { ok: true; message?: string } | { ok: false; error: string };
@@ -159,9 +158,16 @@ export async function assignPlan(formData: FormData): Promise<AdminActionResult>
   return { ok: true, message: `${organization.name} is on ${plan.name} for ${parsed.data.months} month(s).` };
 }
 
-/** The realtime voice cost estimate. Applies to usage recorded from now on; past rows keep their snapshot. */
+/**
+ * A provider cost estimate for one usage stream (see COST_RATE_KEYS). Applies to usage recorded from
+ * now on; past rows keep their snapshot.
+ */
 export async function setVoiceCostRate(formData: FormData): Promise<AdminActionResult> {
   const admin = await requirePlatformAdmin();
+  const rateId = String(formData.get("rate") ?? "browser-voice");
+  if (!isCostRateKeyId(rateId)) {
+    return { ok: false, error: "Unknown cost rate." };
+  }
   const parsed = costRateSchema.safeParse({
     ghsPerMinute: formData.get("ghsPerMinute") ?? "",
     note: formData.get("note") ?? "",
@@ -170,7 +176,8 @@ export async function setVoiceCostRate(formData: FormData): Promise<AdminActionR
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid cost rate." };
   }
 
-  const key = { metric: "VOICE_SECONDS" as const, provider: VOICE_PROVIDER_ID, model: REALTIME_VOICE_MODEL };
+  const { metric, provider, model } = COST_RATE_KEYS[rateId];
+  const key = { metric, provider, model };
   await prisma.$transaction([
     prisma.providerCostRate.upsert({
       where: { metric_provider_model: key },

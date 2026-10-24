@@ -101,7 +101,14 @@ describe("error reporting and jobs", () => {
 
     const response = await retention(request("cron-test-secret"));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ transcriptsDeleted: 0, leadsDeleted: 0, errorReportsDeleted: 0, jobRunsDeleted: 0 });
+    expect(await response.json()).toEqual({
+      transcriptsDeleted: 0,
+      leadsDeleted: 0,
+      callNumbersCleared: 0,
+      errorReportsDeleted: 0,
+      jobRunsDeleted: 0,
+      telephonyEventsDeleted: 0,
+    });
     expect((await sweep(request("cron-test-secret"))).status).toBe(200);
     expect((await prisma.jobRun.findMany()).map((run) => run.job).sort()).toEqual(["retention", "sweep-sessions"]);
   });

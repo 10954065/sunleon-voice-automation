@@ -174,7 +174,7 @@ describe("privacy, lead and export authorization", () => {
       expect(result).toEqual({ ok: true, message: "Deleted 1 lead and 1 transcript." });
       const entry = await prisma.auditLog.findFirstOrThrow({ where: { action: "privacy.contact_erased" } });
       expect(JSON.stringify(entry.metadata)).not.toContain("ama@example.com");
-      expect(entry.metadata).toEqual({ matchedBy: ["email"], leadsDeleted: 1, transcriptsDeleted: 1 });
+      expect(entry.metadata).toEqual({ matchedBy: ["email"], leadsDeleted: 1, transcriptsDeleted: 1, callNumbersCleared: 0 });
     });
   });
 

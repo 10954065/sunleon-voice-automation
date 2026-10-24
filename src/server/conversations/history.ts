@@ -87,6 +87,7 @@ export async function getConversationDetail(organizationId: string, conversation
       usageEvents: { orderBy: { createdAt: "asc" }, take: MAX_DETAIL_EVENTS },
       leads: { orderBy: { createdAt: "asc" } },
       transcript: true,
+      phoneCall: { include: { phoneNumber: { select: { e164: true } } } },
     },
   });
   if (!conversation) {

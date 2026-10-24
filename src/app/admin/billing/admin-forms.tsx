@@ -133,19 +133,32 @@ export function PlanForm({ plan }: { plan?: PlanFormValues }) {
   );
 }
 
-export function CostRateForm({ current }: { current: { ghsPerMinute: string; note: string } | null }) {
+export function CostRateForm({
+  rate,
+  current,
+}: {
+  rate: string;
+  current: { ghsPerMinute: string; note: string } | null;
+}) {
   const { submit, isPending, message } = useAdminAction(setVoiceCostRate);
   return (
     <form action={submit} className="space-y-3">
+      <input type="hidden" name="rate" value={rate} />
       <div className="grid gap-3 sm:grid-cols-[12rem_1fr]">
         <div className="space-y-1">
-          <Label htmlFor="cost-rate">GHS per voice minute</Label>
-          <Input id="cost-rate" name="ghsPerMinute" inputMode="decimal" defaultValue={current?.ghsPerMinute ?? ""} required />
+          <Label htmlFor={`cost-rate-${rate}`}>GHS per minute</Label>
+          <Input
+            id={`cost-rate-${rate}`}
+            name="ghsPerMinute"
+            inputMode="decimal"
+            defaultValue={current?.ghsPerMinute ?? ""}
+            required
+          />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="cost-note">Source of this number</Label>
+          <Label htmlFor={`cost-note-${rate}`}>Source of this number</Label>
           <Input
-            id="cost-note"
+            id={`cost-note-${rate}`}
             name="note"
             defaultValue={current?.note ?? ""}
             placeholder="e.g. Gateway invoice, October 2026"

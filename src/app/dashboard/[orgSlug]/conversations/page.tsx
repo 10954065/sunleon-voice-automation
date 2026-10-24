@@ -5,7 +5,7 @@ import { requireOrgContext } from "@/server/auth/session";
 import { listConversations } from "@/server/conversations/history";
 import { OUTCOME_LABELS } from "@/server/conversations/outcome";
 import { conversationFiltersSchema, firstValues, rangeForDays } from "@/lib/validation/history";
-import { formatDateTime, formatDuration, queryString } from "@/lib/format";
+import { channelLabel, formatDateTime, formatDuration, queryString } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { CHANNEL_OPTIONS, FilterSelect, RANGE_OPTIONS } from "@/components/dashboard/filter-select";
@@ -104,7 +104,7 @@ export default async function ConversationsPage({
                       </td>
                       <td className="px-4 py-2 text-stone-700">{row.agentName}</td>
                       <td className="px-4 py-2 text-stone-700">
-                        {row.channel === "TEST" ? "Dashboard test" : row.originDomain ?? "Website"}
+                        {channelLabel(row.channel, row.originDomain)}
                       </td>
                       <td className="px-4 py-2 text-stone-700">
                         {row.outcome ? OUTCOME_LABELS[row.outcome] : "In progress"}
